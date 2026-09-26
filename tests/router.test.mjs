@@ -36,7 +36,7 @@ test('falls over to the next provider and rewrites the model id', async () => {
 
   const router = createRouter({
     chain: [
-      { name: 'openai', baseUrl: `http://127.0.0.1:${broken.port}/v1`, apiKey: 'k', model: 'gpt-stub' },
+      { name: 'gemini', baseUrl: `http://127.0.0.1:${broken.port}/v1`, apiKey: 'k', model: 'gemini-stub' },
       { name: 'anthropic', baseUrl: `http://127.0.0.1:${healthy.port}/v1`, apiKey: 'k', model: 'claude-stub' },
     ],
     log: () => {},

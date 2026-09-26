@@ -22,8 +22,16 @@ Rules:
 - Never decode or extract payload contents. Detection only.
 - A steganalysis tool failing to parse a file is a signal, not a reason to skip the file.`
 
-function model(name) {
-  return { modelId: name, name, properties: {} }
+function toResourceName(str) {
+  let s = str.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '')
+  if (!/^[a-z]/.test(s)) s = 'm-' + s
+  if (!/[a-z0-9]$/.test(s)) s = s + '-0'
+  if (s.length < 2) s = s + '-0'
+  return s.slice(0, 64).replace(/-+$/, '')
+}
+
+function model(modelId) {
+  return { modelId, name: toResourceName(modelId), properties: {} }
 }
 
 async function registerModelProviders() {
@@ -37,6 +45,15 @@ async function registerModelProviders() {
     },
   ]
 
+  const geminiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY
+  if (geminiKey) {
+    const modelId = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
+    providers.push({
+      type: 'google-gemini',
+      auth: { apiKey: geminiKey },
+      models: [model(modelId)],
+    })
+  }
   if (process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL) {
     providers.push({
       type: 'openai',

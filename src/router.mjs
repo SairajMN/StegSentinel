@@ -6,7 +6,14 @@ const PROVIDER_TIMEOUT_MS = Number(process.env.ROUTER_TIMEOUT_MS ?? 300_000)
 export function envChain() {
   const region = process.env.AWS_REGION ?? 'us-east-1'
   const bedrockKey = process.env.AWS_BEARER_TOKEN_BEDROCK ?? process.env.BEDROCK_API_KEY
+  const geminiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY
   return [
+    {
+      name: 'gemini',
+      baseUrl: process.env.GEMINI_BASE_URL ?? 'https://generativelanguage.googleapis.com/v1beta/openai',
+      apiKey: geminiKey,
+      model: process.env.GEMINI_MODEL ?? 'gemini-2.5-flash',
+    },
     {
       name: 'openai',
       baseUrl: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
@@ -23,7 +30,7 @@ export function envChain() {
       name: 'bedrock',
       baseUrl: process.env.BEDROCK_BASE_URL ?? `https://bedrock-runtime.${region}.amazonaws.com/openai/v1`,
       apiKey: bedrockKey,
-      model: process.env.BEDROCK_MODEL ?? 'anthropic.claude-3-5-sonnet-20241022-v2:0',
+      model: process.env.BEDROCK_MODEL,
     },
   ].filter(provider => provider.apiKey && provider.model)
 }
