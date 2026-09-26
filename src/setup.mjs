@@ -124,7 +124,10 @@ export function gmailAuthHeaders(env = process.env) {
   // ponytail: Google's MCP server publishes no registration_endpoint, so TrueForge rejects
   // auth.type=dcr. Both working alternatives are static headers: an OAuth bearer token
   // (GMAIL_MCP_TOKEN) or a Google API key (GMAIL_API_KEY).
-  if (env.GMAIL_MCP_TOKEN) return { Authorization: `Bearer ${env.GMAIL_MCP_TOKEN}` }
+  const token = env.GMAIL_MCP_TOKEN
+  const isApiKey = value => typeof value === 'string' && value.startsWith('AIza')
+  if (token && !isApiKey(token)) return { Authorization: `Bearer ${token}` }
+  if (isApiKey(token)) return { 'x-goog-api-key': token }
   if (env.GMAIL_API_KEY) return { 'x-goog-api-key': env.GMAIL_API_KEY }
   return undefined
 }

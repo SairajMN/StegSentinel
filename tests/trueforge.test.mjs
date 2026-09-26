@@ -32,6 +32,10 @@ test('gmail auth prefers an OAuth token and falls back to an API key', async () 
     Authorization: 'Bearer tok',
   })
   assert.deepEqual(gmailAuthHeaders({ GMAIL_API_KEY: 'key' }), { 'x-goog-api-key': 'key' })
+  // an AIza… value pasted into the token var is an API key, not an OAuth bearer token
+  assert.deepEqual(gmailAuthHeaders({ GMAIL_MCP_TOKEN: 'AIzaSyX', GMAIL_API_KEY: 'AIzaSyY' }), {
+    'x-goog-api-key': 'AIzaSyX',
+  })
   assert.equal(gmailAuthHeaders({}), undefined)
 })
 
