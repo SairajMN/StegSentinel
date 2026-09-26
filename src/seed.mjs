@@ -1,4 +1,3 @@
-import './load-env.mjs'
 import { crc32, deflateSync } from 'node:zlib'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -55,7 +54,7 @@ export function encodePng({ width, height, offset = 0, lsbText }) {
   ])
 }
 
-export function embedLsb(raw, text) {
+function embedLsb(raw, text) {
   const out = Buffer.from(raw)
   const bits = [...Buffer.from(text, 'utf8')].flatMap(byte =>
     [7, 6, 5, 4, 3, 2, 1, 0].map(shift => (byte >> shift) & 1),

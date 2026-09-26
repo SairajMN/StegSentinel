@@ -1,4 +1,3 @@
-import './load-env.mjs'
 import { createServer } from 'node:http'
 import { Readable } from 'node:stream'
 

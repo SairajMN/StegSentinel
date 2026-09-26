@@ -1,4 +1,3 @@
-import './load-env.mjs'
 import { TrueForge } from '@truefoundry/trueforge-sdk'
 
 const client = new TrueForge({ baseUrl: process.env.TRUEFORGE_BASE_URL ?? 'http://localhost:8790' })

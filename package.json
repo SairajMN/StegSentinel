@@ -7,11 +7,11 @@
   "license": "MIT",
   "scripts": {
     "trueforge": "OUTBOUND_URL_ALLOWED_HOSTS='[\"127.0.0.1\"]' npx @truefoundry/trueforge",
-    "router": "node src/router.mjs",
-    "setup": "node src/setup.mjs",
-    "run": "node src/run.mjs",
-    "seed": "node src/seed.mjs",
-    "test": "node --test"
+    "router": "node --env-file-if-exists=.env src/router.mjs",
+    "setup": "node --env-file-if-exists=.env src/setup.mjs",
+    "run": "node --env-file-if-exists=.env src/run.mjs",
+    "seed": "node --env-file-if-exists=.env src/seed.mjs",
+    "test": "node --env-file-if-exists=.env --test"
   },
   "dependencies": {
     "@truefoundry/trueforge-sdk": "^0.2.0"
