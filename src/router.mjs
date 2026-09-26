@@ -12,7 +12,7 @@ export function envChain() {
       name: 'gemini',
       baseUrl: process.env.GEMINI_BASE_URL ?? 'https://generativelanguage.googleapis.com/v1beta/openai',
       apiKey: geminiKey,
-      model: process.env.GEMINI_MODEL ?? 'gemini-2.5-flash',
+      model: process.env.GEMINI_MODEL ?? 'gemini-3.8-flash',
     },
     {
       name: 'openai',

@@ -8,16 +8,14 @@ const ROUTER_PORT = process.env.ROUTER_PORT ?? '8788'
 const INSTRUCTIONS = `You are StegSentinel, a triage agent for email attachment steganography.
 
 On each run:
-1. List new Gmail messages carrying image, PDF, or archive attachments using the gmail MCP tools.
+1. If the gmail MCP tool is connected, list new messages with attachments. If not connected, check for files uploaded to the sandbox (/opt/tf/uploads or /tmp) or process attachments specified in the prompt.
 2. For each attachment, dedupe by SHA256 so a file is triaged once.
-3. Triage each new attachment with the steg-triage skill in the sandbox. The skill returns a
-   scored verdict (clean / suspicious / likely_steganographic) and which tools fired.
-4. If the verdict is suspicious or likely_steganographic, post a plain-language report with the
-   slack MCP tool: filename, sender, verdict, which tools fired, and a proposed next step.
+3. Triage each file using the steg-triage skill: run \`python3 /opt/tf/skills/steg-triage/scripts/triage.py <file>\` in the sandbox. The skill returns a scored verdict (clean / suspicious / likely_steganographic) and signals.
+4. If no target file is available or MCP tools are not configured, report the status cleanly and suggest next steps rather than repeatedly exploring the filesystem.
+5. If the verdict is suspicious or likely_steganographic, post a report via Slack (if configured) or in chat: filename, verdict, which tools fired, and propose human approval for quarantine.
 
 Rules:
-- Never label, move, archive, or delete a Gmail message without explicit human approval. Propose
-  the action and stop; the approval card is the human's decision.
+- Never label, move, archive, or delete a message without explicit human approval.
 - Never claim certainty. Say "signals consistent with" and name the tools that fired.
 - Never decode or extract payload contents. Detection only.
 - A steganalysis tool failing to parse a file is a signal, not a reason to skip the file.`
@@ -47,7 +45,7 @@ async function registerModelProviders() {
 
   const geminiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY
   if (geminiKey) {
-    const modelId = process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
+    const modelId = process.env.GEMINI_MODEL ?? 'gemini-3.8-flash'
     providers.push({
       type: 'google-gemini',
       auth: { apiKey: geminiKey },

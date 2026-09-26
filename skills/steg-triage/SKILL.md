@@ -11,7 +11,7 @@ only — never decode or extract payload contents.
 ## How to run
 
 ```bash
-python3 /opt/tfy/skills/steg-triage/scripts/triage.py <file>
+python3 /opt/tf/skills/steg-triage/scripts/triage.py <file>
 ```
 
 It prints one JSON object: `verdict`, `signals[]`, `tools{}`, `summary`.
