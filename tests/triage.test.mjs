@@ -221,6 +221,15 @@ function signals(report) {
   return report.signals.map(signal => signal.name)
 }
 
+const looksBase64 = text => {
+  const out = execFileSync(
+    'python3',
+    ['-c', "import sys; sys.path.insert(0,'skills/steg-triage/scripts'); from triage import looks_base64; print(looks_base64(sys.argv[1]))", text],
+    { encoding: 'utf8' },
+  )
+  return out.trim() === 'True'
+}
+
 test('clean images score clean', () => {
   const report = triage('clean.png', encodePng({ width: 96, height: 64 }))
 
@@ -252,10 +261,86 @@ test('missing tools degrade instead of failing', () => {
   const report = triage('clean2.png', encodePng({ width: 96, height: 64, offset: 12 }), { bare: true })
 
   assert.equal(report.verdict, 'clean')
-  for (const output of Object.values(report.tools)) {
-    assert.equal(output, 'not installed')
+  // Every tool that can read a PNG is simply absent; steghide is JPEG/BMP/WAV only, so it is
+  // reported as not applicable rather than missing.
+  for (const [name, output] of Object.entries(report.tools)) {
+    const expected = name === 'steghide' ? 'not applicable to this format' : 'not installed'
+    assert.equal(output, expected, name)
   }
   assert.equal(report.note, 'detection only — payload contents were not decoded')
+})
+
+test('a tool that cannot read this format is not reported as missing', () => {
+  const report = triage('invite.ics', Buffer.from('BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n'))
+
+  assert.equal(report.kind, 'unknown')
+  // pngcheck on a calendar file reports "not a PNG"; that is a type mismatch, not evidence,
+  // and calling it a structural anomaly flagged every .ics in the inbox as suspicious.
+  assert.equal(report.tools.pngcheck, 'not applicable to this format')
+  assert.equal(report.tools.zsteg, 'not applicable to this format')
+  assert.equal(report.verdict, 'clean')
+  assert.deepEqual(report.signals, [])
+})
+
+test('a JPEG gets steghide but not pngcheck', () => {
+  const jpeg = Buffer.concat([
+    Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+    Buffer.alloc(64),
+    Buffer.from([0xff, 0xd9]),
+  ])
+  const report = triage('photo.jpg', jpeg)
+
+  assert.equal(report.kind, 'jpeg')
+  assert.equal(report.tools.steghide, 'not installed')
+  assert.equal(report.tools.pngcheck, 'not applicable to this format')
+})
+
+// Every case below was a false positive against a real Gmail inbox, where a quarter of
+// the attachments were calendar invites, docx reports and PDF tickets.
+const zipMembers = [
+  Buffer.from('PK\x03\x04', 'latin1'),
+  Buffer.alloc(200, 0x41),
+  Buffer.from([0xff, 0xd9, 0xff, 0xd8]),
+].join('')
+
+test('a docx is a zip by construction, not a hidden payload', () => {
+  const report = triage('report.docx', Buffer.from(zipMembers, 'latin1'))
+
+  assert.equal(report.kind, 'archive')
+  assert.equal(report.verdict, 'clean')
+  assert.deepEqual(report.signals, [])
+})
+
+test('whitespace padding after %%EOF is not a PDF payload', () => {
+  const pdf = Buffer.concat([
+    Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n', 'latin1'),
+    Buffer.alloc(64, 0x20),
+  ])
+  const report = triage('ticket.pdf', pdf)
+
+  assert.equal(report.kind, 'pdf')
+  assert.equal(report.verdict, 'clean')
+})
+
+test('a calendar Description with meeting URLs is not a metadata blob', () => {
+  const ics = [
+    'BEGIN:VCALENDAR',
+    'DESCRIPTION:Topic: Build With AI: Basics - Live Build Session.Join Joe Holmes for a',
+    ' live start to finish build session at https://meet.google.com/abc-defg-hij for details',
+    'END:VCALENDAR',
+  ].join('\r\n')
+  const report = triage('invite.ics', Buffer.from(ics))
+
+  assert.equal(report.kind, 'unknown')
+  assert.equal(report.verdict, 'clean')
+  assert.deepEqual(report.signals, [])
+})
+
+test('a real base64 blob in a PNG comment is still caught', () => {
+  const blob = Buffer.from('aGVsbG8gd29ybGQgdGhpcyBpcyBhIHNlY3JldCBwYXlsb2Fk').toString('base64')
+  assert.equal(looksBase64(blob), true)
+  assert.equal(looksBase64('Topic: Build With AI: Basics - Live Build Session at a meeting'), false)
+  assert.equal(looksBase64('short'), false)
 })
 
 test('a rigged file is still caught with no external tools installed', () => {

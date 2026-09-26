@@ -36,6 +36,8 @@ export function formatReport(report) {
   }
   const missing = Object.entries(report.tools).filter(([, out]) => out === 'not installed').map(([name]) => name)
   if (missing.length > 0) lines.push(`    (not installed: ${missing.join(', ')})`)
+  // A tool that cannot read this format is not a gap in the analysis, so it is not worth
+  // printing on every row; the verdict already accounts for which tools actually ran.
   return lines.join('\n')
 }
 

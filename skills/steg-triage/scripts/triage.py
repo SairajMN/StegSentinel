@@ -10,10 +10,30 @@ import sys
 import zlib
 
 TOOL_TIMEOUT_SECONDS = 15
+NOT_APPLICABLE = "not applicable to this format"
 CHUNK_LIMIT = 400
 ARCHIVE_MAGIC = (b"PK\x03\x04", b"\x1f\x8b\x08", b"7z\xbc\xaf\x27\x1c", b"Rar!\x1a\x07")
 PRINTABLE = re.compile(rb"[\x20-\x7e]{8,}")
 BASE64ISH = re.compile(r"[A-Za-z0-9+/]{40,}={0,2}")
+
+
+def looks_base64(text):
+    """Base64 payload, not prose that happens to contain 40 alphanumerics in a row.
+
+    A calendar Description full of meeting URLs matched the old loose pattern and was
+    reported as a hidden blob. Real base64 mixes cases and digits throughout and has no
+    spaces; prose almost always has whitespace, so that is the cheapest reliable split.
+    """
+    stripped = text.strip()
+    if len(stripped) < 40 or " " in stripped:
+        return False
+    candidate = stripped[:200]
+    if not re.fullmatch(r"[A-Za-z0-9+/=]+", candidate):
+        return False
+    digits = sum(c.isdigit() for c in candidate)
+    upper = sum(c.isupper() for c in candidate)
+    lower = sum(c.islower() for c in candidate)
+    return digits >= len(candidate) * 0.05 and upper >= 3 and lower >= 3
 ZSTEG_TEXT = re.compile(r"text:\s*(\".*\")", re.S)
 ZSTEG_MIN_RUN = 24
 ZSTEG_WORD = re.compile(r"[A-Za-z]{4,}")
@@ -202,8 +222,13 @@ def lsb_ascii_run(pixels, channels):
     return best[1] if best[0] >= ZSTEG_MIN_RUN else None
 
 
-def inspect(blob):
+def inspect(blob, kind="unknown"):
     signals = []
+    if kind in ("archive", "unknown"):
+        # A docx is a zip: PK headers repeat by design, and a random 0xffd9 can appear in
+        # any compressed stream. Marker scanning is only meaningful in a known image format.
+        return signals
+
     idat = png_idat(blob)
     jpeg_end = blob.rfind(b"\xff\xd9") + 2 if blob.rfind(b"\xff\xd9") >= 0 else None
     trailer_start = idat["end"] if idat else jpeg_end
@@ -229,7 +254,7 @@ def inspect(blob):
         if not suspicious_keywords.search(keyword):
             continue
         text = value.decode("latin1", "replace").strip()
-        if BASE64ISH.search(text) or len(text) > 80:
+        if looks_base64(text) or len(text) > 80:
             signals.append(
                 {
                     "source": "fallback",
@@ -267,18 +292,31 @@ def from_tools(results):
     signals = []
     exiftool = results.get("exiftool")
     if exiftool:
+        # exiftool always prints filesystem facts (File Name, Directory, File Size, ExifTool
+        # Version). Those are it describing where the file is, not data inside it, and
+        # matching "Directory" as a Description flagged every calendar invite as suspicious.
+        noise = re.compile(r"^(File Name|Directory|File Size|File Modification Date|File Access|"
+                           r"File Inode|ExifTool Version|File Permissions|File Type|File Inode Change)", re.I)
+        # Formats with legitimate long prose fields: a calendar Description is a real event
+        # description, not a hidden payload. Only flag length on formats where a field that
+        # long has no innocent explanation.
+        prose_ok = results.get("_kind") in ("archive", "unknown", "pdf")
         for line in exiftool.splitlines():
-            value = line.partition(":")[2].strip()
-            if re.search(r"Comment|Description|Creator|Author|Title", line) and BASE64ISH.search(value):
+            name, _, value = line.partition(":")
+            if noise.match(name.strip()) or not value.strip():
+                continue
+            if re.search(r"Comment|Description|Creator|Author|Title", name) and looks_base64(value):
                 signals.append({"source": "exiftool", "name": "metadata_blob", "detail": line.strip()[:120]})
                 break
-            if re.search(r"Comment|Description", line) and len(value) > 120:
+            if not prose_ok and re.search(r"Comment|Description", name) and len(value.strip()) > 120:
                 signals.append({"source": "exiftool", "name": "oversized_metadata", "detail": line.strip()[:120]})
                 break
 
     binwalk = results.get("binwalk")
     embedded_re = r"Zip archive|gzip compressed|7-zip|RAR archive|embedded"
-    if binwalk and re.search(embedded_re, binwalk, re.I):
+    # A .docx/.pkpass is a zip by construction, so binwalk listing its members is the format
+    # working. Only treat an embedded file as a signal in a format where it should not exist.
+    if binwalk and results.get("_kind") not in ("archive",) and re.search(embedded_re, binwalk, re.I):
         hit = next((line.strip() for line in binwalk.splitlines() if re.search(embedded_re, line, re.I)), "")
         signals.append({"source": "binwalk", "name": "embedded_file", "detail": hit[:120]})
 
@@ -308,19 +346,54 @@ def from_tools(results):
     return signals
 
 
+def applicable(path, blob):
+    """Tools are format-specific. Running pngcheck on a calendar invite just yields
+    'not a PNG', which is a type mismatch, not evidence of anything.
+
+    A .docx or .pkpass *is* a zip, so binwalk finding files inside one is the format
+    working as designed, not data hidden in it. Only formats where appending or LSB
+    tricks are meaningful are worth a verdict.
+    """
+    head = blob[:12]
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png", ["exiftool", "binwalk", "zsteg", "pngcheck"]
+    if head.startswith(b"\xff\xd8\xff"):
+        return "jpeg", ["exiftool", "binwalk", "steghide"]
+    if head.startswith(b"RIFF") and blob[8:12] == b"WAVE":
+        return "wav", ["exiftool", "binwalk", "steghide"]
+    if head.startswith(b"BM"):
+        return "bmp", ["exiftool", "binwalk", "zsteg", "steghide"]
+    if blob[:5] == b"%PDF-":
+        return "pdf", ["exiftool", "binwalk"]
+    if blob[:4] in (b"PK\x03\x04", b"Rar!", b"7z\xbc\xaf\x27\x1c") or blob[:2] == b"\x1f\x8b":
+        return "archive", []
+    return "unknown", []
+
+
+def trailing_data(blob, kind):
+    """Bytes after the format's real end. PDFs conventionally pad with whitespace after
+    %%EOF, so that padding is not a signal."""
+    if kind == "pdf":
+        end = blob.rfind(b"%%EOF")
+        return b"" if end < 0 else blob[end + 5:].strip()
+    return blob
+
+
 def triage(path):
     with open(path, "rb") as handle:
         blob = handle.read()
 
+    kind, wanted = applicable(path, blob)
     results = {
+        "_kind": kind,
         "exiftool": run(["exiftool", path]),
         "binwalk": run(["binwalk", path]),
-        "zsteg": run(["zsteg", path]),
-        "steghide": run(["steghide", "info", "-p", "", path]),
-        "pngcheck": run(["pngcheck", "-v", path]),
+        "zsteg": run(["zsteg", path]) if "zsteg" in wanted else None,
+        "steghide": run(["steghide", "info", "-p", "", path]) if "steghide" in wanted else None,
+        "pngcheck": run(["pngcheck", "-v", path]) if "pngcheck" in wanted else None,
     }
     unique = {}
-    for signal in from_tools(results) + inspect(blob):
+    for signal in from_tools(results) + inspect(trailing_data(blob, kind), kind):
         unique.setdefault(signal["name"], signal)
     signals = list(unique.values())
     names = set(unique)
@@ -336,10 +409,12 @@ def triage(path):
         "file": os.path.basename(path),
         "size": len(blob),
         "verdict": verdict,
+        "kind": kind,
         "signals": signals,
         "tools": {
-            name: ("not installed" if output is None else output[:CHUNK_LIMIT])
+            name: (NOT_APPLICABLE if name not in wanted else "not installed" if output is None else output[:CHUNK_LIMIT])
             for name, output in results.items()
+            if name != "_kind"
         },
         "summary": "; ".join(f"{signal['source']}:{signal['name']}" for signal in signals) or "nothing fired",
         "note": "detection only — payload contents were not decoded",
