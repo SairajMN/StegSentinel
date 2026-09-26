@@ -78,6 +78,19 @@ test('agent is wired with model, skill, sandbox and approval gates', { skip: liv
   }
 })
 
+test('sandboxes are not retained long enough to exhaust disk', { skip: live ? false : 'trueforge not running' }, async () => {
+  const provider = (await client.settings.sandboxProviders.get()).data
+
+  // One sandbox is provisioned per session and each holds a venv plus the analysis tools, so a
+  // multi-day TTL fills the account's disk: 24 sessions on a 7200-minute TTL made the next run
+  // fail with "total disk limit" before it ever reached the tool install.
+  assert.ok(
+    provider.manifest.autoDeleteIntervalInMinutes <= 120,
+    `sandbox TTL is ${provider.manifest.autoDeleteIntervalInMinutes} min — too long for one sandbox per session`,
+  )
+  assert.ok(provider.manifest.autoStopIntervalInMinutes < provider.manifest.autoDeleteIntervalInMinutes)
+})
+
 test('named gmail tools exist on the connected server', { skip: live ? false : 'trueforge not running' }, async () => {
   const remote = (await client.settings.mcpServers.list()).data.find(s => s.name === 'gmail')
   if (!remote) return

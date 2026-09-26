@@ -119,6 +119,11 @@ is for — the harness blocks loopback by default.
   `SKILL_REPO_PATH` + `SKILL_REPO_REF`, so `skills/steg-triage/` has to be on the branch you pin.
 - **Daytona key** in `DAYTONA_API_KEY`. Without it `npm run setup` skips the sandbox and the agent
   has nowhere to run the skill.
+- **Daytona disk.** One sandbox is provisioned per session, and each holds a venv plus the
+  analysis tools, so they add up. `npm run setup` sets `autoDeleteIntervalInMinutes` to 30
+  (`SANDBOX_TTL_MINUTES`) — raise it and you will hit *"sandbox has reached its total disk
+  limit"*. Sandboxes are deleted by Daytona after that window; there is no delete route in the
+  harness, so a full account is cleared from the Daytona dashboard.
 - **Gmail** — one-time browser consent, then it just works:
 
   ```bash

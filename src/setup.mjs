@@ -105,7 +105,11 @@ async function registerSandbox() {
       execTimeoutMs: 60_000,
       autoStopIntervalInMinutes: 5,
       autoArchiveIntervalInMinutes: 60,
-      autoDeleteIntervalInMinutes: 7200,
+      // One sandbox per session, each with a venv and the analysis tools installed, so a long
+      // TTL fills the account's disk fast: 24 sessions on a 5-day TTL exhausted the free tier
+      // and the next run failed with "total disk limit". A sandbox only has to outlive one
+      // turn, so keep this short. Override with SANDBOX_TTL_MINUTES.
+      autoDeleteIntervalInMinutes: Number(process.env.SANDBOX_TTL_MINUTES ?? 30),
     },
   })
   console.log('  sandbox         daytona')
