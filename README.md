@@ -96,10 +96,12 @@ is for — the harness blocks loopback by default.
   `SKILL_REPO_PATH` + `SKILL_REPO_REF`, so `skills/steg-triage/` has to be on the branch you pin.
 - **Daytona key** in `DAYTONA_API_KEY`. Without it `npm run setup` skips the sandbox and the agent
   has nowhere to run the skill.
-- **MCP servers** — set `GMAIL_MCP_URL` (DCR/OAuth, authorize once in the chat UI) and
-  `SLACK_MCP_URL` (`SLACK_MCP_TOKEN` for header auth). Either can be omitted; the agent wires
-  whatever is registered.
-- Add `gmail.modify` scope only after you have seen the approval card block a label change.
+- **Gmail** — set `GMAIL_MCP_TOKEN` (OAuth access token) or `GMAIL_API_KEY` (Google API key).
+  Google's MCP server publishes no `registration_endpoint`, so TrueForge's `auth.type=dcr` cannot
+  be used with it; a static credential header is the working path. Token wins if both are set.
+- **Slack** — set `SLACK_MCP_URL` and, for header auth, `SLACK_MCP_TOKEN`.
+  Either server can be omitted; the agent wires whatever is registered.
+- Add the `gmail.modify` scope only after you have seen the approval card block a label change.
 
 ## Non-goals
 
