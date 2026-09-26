@@ -47,19 +47,34 @@ cp .env.example .env    # add your keys
    npm run seed          # fixtures/: 2 clean, 1 LSB-rigged, 1 with an appended archive
    ```
 
-5. **Stage and score the inbox** — pulls attachments, dedupes by hash, runs the scorer:
+5. **Ingest and score** — runs on your machine, not in the sandbox. This is the Gmail step:
 
    ```bash
-   npm run fetch                    # stage + triage
+   npm run fetch                    # pull attachments, dedupe by hash, score each one
    npm run fetch -- --stage-only    # just pull the bytes
    ```
 
-6. **Run it** — chat UI (best for the live demo: Approve/Edit/Reject renders as a card) or:
+   It stages into `data/staged/` and writes `data/staged/manifest.json`.
+
+6. **Run the agent** — chat UI (best for the live demo: Approve/Edit/Reject renders as a card) or:
 
    ```bash
    npm run run                # one session, streamed to your terminal
    npm run run -- --schedule  # hourly unattended sweep
    ```
+
+### Why ingest and the agent are separate steps
+
+`npm run fetch` holds the `gmail.readonly` credential and runs on your machine. The agent runs in
+the Daytona sandbox, which has neither that credential nor your disk. So ingestion is an explicit
+step you run, and the agent picks up whatever files it is given.
+
+This is a deliberate split, not a workaround. The credential never enters the sandbox, and the
+sandbox never gains read access to your mailbox. The agent still owns everything that matters for
+governance: the verdict, the report, the approval gate, and the audit trail.
+
+In the chat UI, name a staged file in your message to have the agent triage it, e.g.
+`triage data/staged/d063a0252ad02f18-Screenshot_2026-09-24_at_9.40.11_PM.png`.
 
 ## Why a router for model fallback
 

@@ -20,19 +20,17 @@ tool inside gets a 15s timeout of its own.
 
 ## Getting a file
 
-Attachments reach the sandbox two ways, in this order:
-
-1. Already present — `/opt/tf/uploads`, `/tmp`, or the workspace. Triage these.
-2. Gmail. The local fetcher stages attachments under their SHA-256 and writes
-   `data/staged/manifest.json`; triage each `path` in that manifest.
+Files attached to a message are materialised by the harness under `uploads/` in the sandbox working
+directory, and the harness prints each path for you — use those paths verbatim, or `ls uploads/`
+if you need to look. A path from the operator's own machine does not exist here.
 
 ```bash
-python3 /opt/tf/skills/steg-triage/scripts/fetch_gmail.py --dest data/staged
+python3 /opt/tf/skills/steg-triage/scripts/triage.py uploads/<name>.png
 ```
 
-The fetcher runs with `gmail.readonly` and can only read. It never labels,
-moves, or deletes. If it reports a scope error, Gmail access is not configured —
-say so once and triage whatever files you do have, rather than retrying.
+For the operator's own machine, `python3 /opt/tf/skills/steg-triage/scripts/fetch_gmail.py` stages
+Gmail attachments under their SHA-256 and writes `data/staged/manifest.json`. The fetcher runs with
+`gmail.readonly` and can only read — it never labels, moves, or deletes.
 
 Never ask for a file that was already triaged; dedupe by SHA-256 first.
 

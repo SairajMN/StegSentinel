@@ -1,11 +1,59 @@
 import { TrueForge } from '@truefoundry/trueforge-sdk'
+import { readFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { basename } from 'node:path'
 
 const client = new TrueForge({ baseUrl: process.env.TRUEFORGE_BASE_URL ?? 'http://localhost:8790' })
 const AGENT_NAME = 'stegsentinel'
+const MANIFEST = process.env.MANIFEST_PATH ?? 'data/staged/manifest.json'
+const IMAGE = /png|jpe?g|bmp|gif|tiff?|webp/i
+const MAX_BYTES = 4 << 20
 
-const TASK = `Triage new Gmail attachments. List messages with image, PDF, or archive attachments,
+// Ingestion runs locally (npm run fetch); the sandbox is a separate machine with no Gmail
+// credential and no view of data/staged. A local path in the prompt resolves to nothing there,
+// so the bytes travel with the message: the harness materialises each data URI as a real file
+// in the sandbox, which is what the skill then analyses.
+async function buildTurn() {
+  if (!existsSync(MANIFEST)) {
+    return {
+      content: `Triage new Gmail attachments. List messages with image, PDF, or archive attachments,
 dedupe by SHA256, run the steg-triage skill in the sandbox on each new file, and report any
-suspicious or likely_steganographic result. Propose the next step and wait for my approval.`
+suspicious or likely_steganographic result. Propose the next step and wait for my approval.`,
+    }
+  }
+
+  const { attachments = [] } = JSON.parse(await readFile(MANIFEST, 'utf8'))
+  const unique = [...new Map(attachments.map(a => [a.sha256, a])).values()]
+  const images = unique.filter(a => IMAGE.test(a.filename) && a.size <= MAX_BYTES)
+
+  const content = [
+    {
+      type: 'text',
+      text: [
+        `Gmail ingestion already ran on the operator's machine: ${unique.length} attachments staged,`,
+        `deduped by SHA-256. The ${images.length} image file(s) below are attached to this message.`,
+        ``,
+        `Run the steg-triage skill on each attached file. Report the verdict for each, which tools`,
+        `fired, and a plain-language summary. A clean verdict is a real result, not a failure.`,
+        `Propose the next step and wait for my approval before anything is labelled or moved.`,
+      ].join('\n'),
+    },
+  ]
+
+  for (const record of images) {
+    const bytes = await readFile(record.path)
+    content.push({
+      type: 'file',
+      name: basename(record.path),
+      data: `data:${record.mimeType || 'application/octet-stream'};base64,${bytes.toString('base64')}`,
+    })
+  }
+
+  if (images.length === 0) {
+    content[0].text += `\n\nThis batch has no image attachments. Say so plainly; do not explore the filesystem.`
+  }
+  return { content }
+}
 
 const SWEEP_CRON = process.env.SWEEP_CRON ?? '0 * * * *'
 
@@ -15,7 +63,7 @@ async function createSchedule() {
   const existing = page.data.find(schedule => schedule.name === name)
   const manifest = {
     cron: SWEEP_CRON,
-    task: TASK,
+    task: await task(),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   }
 
@@ -33,7 +81,7 @@ async function runOnce() {
   console.log(`session ${session.data.id}\n`)
 
   const stream = await client.sessions.createTurnStream(session.data.id, {
-    input: [{ type: 'user.message', content: TASK }],
+    input: [{ type: 'user.message', ...(await buildTurn()) }],
   })
 
   for await (const event of stream) {
