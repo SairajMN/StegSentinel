@@ -122,8 +122,14 @@ is for — the harness blocks loopback by default.
 - **Daytona disk.** One sandbox is provisioned per session, and each holds a venv plus the
   analysis tools, so they add up. `npm run setup` sets `autoDeleteIntervalInMinutes` to 30
   (`SANDBOX_TTL_MINUTES`) — raise it and you will hit *"sandbox has reached its total disk
-  limit"*. Sandboxes are deleted by Daytona after that window; there is no delete route in the
-  harness, so a full account is cleared from the Daytona dashboard.
+  limit"*. To clear a full account now: `node scripts/clean-sandboxes.mjs` (add `--dry-run` first).
+  The harness has no delete route, so this talks to Daytona's API directly.
+- **The first triage of a cold sandbox is slow.** The skill installs `exiftool`, `binwalk`,
+  `pngcheck` and Ruby+`zsteg` on demand, which takes a few minutes. `SANDBOX_EXEC_TIMEOUT_MS`
+  is 300s for that reason; at 60s the install is killed partway and every tool then reports
+  "not installed", which looks like a missing tool rather than a slow one. Run once before you
+  present. A fresh sandbox is identifiable in the report by `"unavailable_tools": []` — an
+  empty list means all five tools ran.
 - **Gmail** — one-time browser consent, then it just works:
 
   ```bash

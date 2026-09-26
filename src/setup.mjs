@@ -102,7 +102,10 @@ async function registerSandbox() {
     manifest: {
       type: 'daytona',
       auth: { apiKey: process.env.DAYTONA_API_KEY },
-      execTimeoutMs: 60_000,
+      // A cold sandbox installs exiftool, binwalk, pngcheck and Ruby+zsteg on first triage,
+      // which takes minutes — a 60s exec timeout killed the install partway and every tool
+      // came back "not installed", which reads as a clean sandbox rather than a slow one.
+      execTimeoutMs: Number(process.env.SANDBOX_EXEC_TIMEOUT_MS ?? 300_000),
       autoStopIntervalInMinutes: 5,
       autoArchiveIntervalInMinutes: 60,
       // One sandbox per session, each with a venv and the analysis tools installed, so a long
