@@ -1,0 +1,22 @@
+{
+  "name": "stegsentinel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Gmail attachment steganography triage agent on TrueForge",
+  "license": "MIT",
+  "scripts": {
+    "trueforge": "OUTBOUND_URL_ALLOWED_HOSTS='[\"127.0.0.1\"]' npx @truefoundry/trueforge",
+    "router": "node src/router.mjs",
+    "setup": "node src/setup.mjs",
+    "run": "node src/run.mjs",
+    "seed": "node src/seed.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@truefoundry/trueforge-sdk": "^0.2.0"
+  },
+  "engines": {
+    "node": ">=22.14"
+  }
+}
