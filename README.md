@@ -108,17 +108,19 @@ is for — the harness blocks loopback by default.
 
   ```bash
   gcloud auth application-default login \
-    --client-id-file=~/Downloads/client_secret_<your-project>.json \
+    --client-id-file=$HOME/Downloads/client_secret_<your-project>.json \
     --scopes=https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/cloud-platform
   ```
 
-  Two things gcloud won't tell you unless you hit them:
+  Three things gcloud won't tell you unless you hit them:
 
   - **`--client-id-file` is required.** Google blocks *gcloud's own* OAuth client for
     `gmail.readonly` ("this app tried to access sensitive info"). Pass a Desktop client secret you
     created in Cloud Console → APIs & Services → Credentials, and the consent screen offers
     *Advanced → Go to (unsafe)* — safe, because it's your own client and it only reads mail.
   - **`cloud-platform` must be in the list.** gcloud rejects `gmail.readonly` alone.
+  - **Use `$HOME`, not `~`.** gcloud does not expand a tilde in a flag value and reports
+    "Cannot read file" even though the file is there.
 
   `gcloud auth application-default` will not widen scopes on an existing credential, so this step
   is required; it only has to happen once. `gmail.readonly` is deliberate: the fetcher physically

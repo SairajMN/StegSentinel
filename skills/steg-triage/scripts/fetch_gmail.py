@@ -70,9 +70,10 @@ SCOPE_HELP = (
     "gmail scope missing. Google blocks gcloud's own OAuth client for gmail.readonly,\n"
     "so log in with your own Desktop client secret instead:\n"
     "  gcloud auth application-default login \\\n"
-    "    --client-id-file=~/Downloads/client_secret_<your-project>.json \\\n"
+    "    --client-id-file=$HOME/Downloads/client_secret_<your-project>.json \\\n"
     "    --scopes=https://www.googleapis.com/auth/gmail.readonly,"
     "https://www.googleapis.com/auth/cloud-platform\n"
+    "Use $HOME, not ~ — gcloud does not expand a tilde in a flag value.\n"
     "On the consent screen choose Advanced > Go to <project> (unsafe) — a Desktop\n"
     "client you created yourself is safe; it only reads your mail."
 )
