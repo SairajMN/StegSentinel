@@ -9,13 +9,19 @@ const AGENT_MODEL = process.env.AGENT_MODEL ?? `failover/${ROUTER_MODEL}`
 const INSTRUCTIONS = `You are StegSentinel, a triage agent for email attachment steganography.
 
 On each run:
-1. If the gmail MCP tool is connected, list new messages with attachments. If not connected, check for files uploaded to the sandbox (/opt/tf/uploads or /tmp) or process attachments specified in the prompt.
+1. Find work with the gmail MCP tools: \`search_threads\` for recent messages, then \`get_thread\` or
+   \`get_message\` for the ones carrying an image, PDF, or archive attachment. If the gmail MCP is
+   not connected, triage any file already present in the sandbox (/opt/tf/uploads, /tmp, or the
+   workspace) or named in the prompt. If neither exists, say so once and stop.
 2. For each attachment, dedupe by SHA256 so a file is triaged once.
 3. Triage each file using the steg-triage skill: run \`python3 /opt/tf/skills/steg-triage/scripts/triage.py <file>\` in the sandbox. The skill returns a scored verdict (clean / suspicious / likely_steganographic) and signals.
 4. If no target file is available or MCP tools are not configured, report the status cleanly and suggest next steps rather than repeatedly exploring the filesystem.
 5. If the verdict is suspicious or likely_steganographic, post a report via Slack (if configured) or in chat: filename, verdict, which tools fired, and propose human approval for quarantine.
 
 Rules:
+- Quarantine means one label on a thread (\`label_thread\` / \`label_message\`). Anything that removes
+  or hides mail — \`trash_thread\`, \`unlabel_thread\`, spam marking — is destructive and off-limits
+  even if a human asks; say it needs a human to do it in Gmail.
 - Never label, move, archive, or delete a message without explicit human approval.
 - Never claim certainty. Say "signals consistent with" and name the tools that fired.
 - Never decode or extract payload contents. Detection only.
@@ -114,35 +120,42 @@ async function registerSkill() {
   console.log(`  skill           ${manifest.name} (${manifest.url} · ${manifest.ref})`)
 }
 
+export function gmailAuthHeaders(env = process.env) {
+  // ponytail: Google's MCP server publishes no registration_endpoint, so TrueForge rejects
+  // auth.type=dcr. Both working alternatives are static headers: an OAuth bearer token
+  // (GMAIL_MCP_TOKEN) or a Google API key (GMAIL_API_KEY).
+  if (env.GMAIL_MCP_TOKEN) return { Authorization: `Bearer ${env.GMAIL_MCP_TOKEN}` }
+  if (env.GMAIL_API_KEY) return { 'x-goog-api-key': env.GMAIL_API_KEY }
+  return undefined
+}
+
 async function registerMcpServers() {
   const registered = []
+  const gmailHeaders = gmailAuthHeaders()
 
-  // ponytail: Google's MCP server publishes no registration_endpoint, so TrueForge rejects
-  // auth.type=dcr. It takes a plain OAuth access token as a bearer header instead.
-  const gmailAuth = process.env.GMAIL_MCP_TOKEN
-    ? { type: 'header', headers: { Authorization: `Bearer ${process.env.GMAIL_MCP_TOKEN}` } }
-    : undefined
-
-  if (process.env.GMAIL_MCP_URL && gmailAuth) {
+  if (process.env.GMAIL_MCP_URL && gmailHeaders) {
     await client.settings.mcpServers.createOrUpdate({
       manifest: {
         type: 'remote',
         name: 'gmail',
         url: process.env.GMAIL_MCP_URL,
         description: 'Read Gmail messages and download attachments.',
-        auth: gmailAuth,
+        auth: { type: 'header', headers: gmailHeaders },
       },
     })
     registered.push({
       name: 'gmail',
-      enableTools: ['@read-only', 'list_messages', 'get_attachment'],
-      requireApprovalForTools: ['@write', '@destructive', 'modify_labels', 'trash_message'],
+      // enable_tools accepts only @all/@read-only; the literals are this server's real read tools
+      // (verified against its tools/list). Quarantine happens on the thread, so trash_thread and
+      // label_thread are intentionally left off and only reachable via @destructive approval.
+      enableTools: ['@read-only', 'search_threads', 'get_message', 'get_thread', 'list_labels'],
+      requireApprovalForTools: ['@write', '@destructive'],
     })
     console.log('  mcp server      gmail')
   } else {
-    const why = process.env.GMAIL_MCP_URL
-      ? 'GMAIL_MCP_TOKEN unset (see README: mint an OAuth token with the gmail.readonly scope)'
-      : 'GMAIL_MCP_URL unset'
+    const why = !process.env.GMAIL_MCP_URL
+      ? 'GMAIL_MCP_URL unset'
+      : 'no Gmail credential (set GMAIL_MCP_TOKEN for OAuth, or GMAIL_API_KEY)'
     console.log(`  mcp server      gmail skipped (${why})`)
   }
 
@@ -204,9 +217,11 @@ async function main() {
   console.log('done')
 }
 
-main().catch(error => {
-  console.error(`setup failed: ${error.message}`)
-  process.exit(1)
-})
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(error => {
+    console.error(`setup failed: ${error.message}`)
+    process.exit(1)
+  })
+}
 
 
