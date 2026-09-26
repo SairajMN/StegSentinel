@@ -51,14 +51,16 @@ async function registerModelProviders() {
       models: [model(process.env.ANTHROPIC_MODEL)],
     })
   }
-  if (process.env.AWS_BEARER_TOKEN_BEDROCK && process.env.BEDROCK_MODEL) {
+  const bedrockKey = process.env.AWS_BEARER_TOKEN_BEDROCK ?? process.env.BEDROCK_API_KEY
+  if (bedrockKey) {
     const region = process.env.AWS_REGION ?? 'us-east-1'
+    const modelId = process.env.BEDROCK_MODEL ?? 'anthropic.claude-3-5-sonnet-20241022-v2:0'
     providers.push({
       type: 'custom',
       name: 'bedrock',
       baseUrl: `https://bedrock-runtime.${region}.amazonaws.com/openai/v1`,
-      auth: { apiKey: process.env.AWS_BEARER_TOKEN_BEDROCK },
-      models: [model(process.env.BEDROCK_MODEL)],
+      auth: { apiKey: bedrockKey },
+      models: [model(modelId)],
     })
   }
 

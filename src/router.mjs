@@ -5,6 +5,7 @@ const PROVIDER_TIMEOUT_MS = Number(process.env.ROUTER_TIMEOUT_MS ?? 300_000)
 
 export function envChain() {
   const region = process.env.AWS_REGION ?? 'us-east-1'
+  const bedrockKey = process.env.AWS_BEARER_TOKEN_BEDROCK ?? process.env.BEDROCK_API_KEY
   return [
     {
       name: 'openai',
@@ -21,8 +22,8 @@ export function envChain() {
     {
       name: 'bedrock',
       baseUrl: process.env.BEDROCK_BASE_URL ?? `https://bedrock-runtime.${region}.amazonaws.com/openai/v1`,
-      apiKey: process.env.AWS_BEARER_TOKEN_BEDROCK,
-      model: process.env.BEDROCK_MODEL,
+      apiKey: bedrockKey,
+      model: process.env.BEDROCK_MODEL ?? 'anthropic.claude-3-5-sonnet-20241022-v2:0',
     },
   ].filter(provider => provider.apiKey && provider.model)
 }
