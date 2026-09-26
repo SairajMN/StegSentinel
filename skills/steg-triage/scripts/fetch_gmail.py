@@ -66,6 +66,18 @@ def stage(entries, fetch, dest):
     return records
 
 
+SCOPE_HELP = (
+    "gmail scope missing. Google blocks gcloud's own OAuth client for gmail.readonly,\n"
+    "so log in with your own Desktop client secret instead:\n"
+    "  gcloud auth application-default login \\\n"
+    "    --client-id-file=~/Downloads/client_secret_<your-project>.json \\\n"
+    "    --scopes=https://www.googleapis.com/auth/gmail.readonly,"
+    "https://www.googleapis.com/auth/cloud-platform\n"
+    "On the consent screen choose Advanced > Go to <project> (unsafe) — a Desktop\n"
+    "client you created yourself is safe; it only reads your mail."
+)
+
+
 def fail(message):
     print(f"fetch_gmail: {message}", file=sys.stderr)
     raise SystemExit(1)
@@ -122,11 +134,7 @@ def main(argv=None):
         # one-time browser consent. Report it as such instead of a library traceback.
         text = str(error)
         if "insufficient" in text and "scope" in text.lower():
-            fail(
-                "gmail scope missing. Re-authorize once:\n"
-                "  gcloud auth application-default login "
-                "--scopes=https://www.googleapis.com/auth/gmail.readonly"
-            )
+            fail(SCOPE_HELP)
         if "invalid_grant" in text or "token" in text.lower() and "expired" in text.lower():
             fail("gmail credential expired or revoked. Re-run the gcloud login above.")
         fail(f"gmail fetch failed: {text.splitlines()[0][:200]}")

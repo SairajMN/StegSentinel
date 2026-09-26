@@ -108,13 +108,21 @@ is for — the harness blocks loopback by default.
 
   ```bash
   gcloud auth application-default login \
-    --scopes=https://www.googleapis.com/auth/gmail.readonly
+    --client-id-file=~/Downloads/client_secret_<your-project>.json \
+    --scopes=https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/cloud-platform
   ```
 
-  `gcloud auth application-default` will not widen scopes on an existing credential — that is why
-  the `login --scopes` step is required, and it only has to happen once. `gmail.readonly` is
-  deliberate: the fetcher physically cannot label, move, or delete mail, so quarantine stays behind
-  the harness's approval gate.
+  Two things gcloud won't tell you unless you hit them:
+
+  - **`--client-id-file` is required.** Google blocks *gcloud's own* OAuth client for
+    `gmail.readonly` ("this app tried to access sensitive info"). Pass a Desktop client secret you
+    created in Cloud Console → APIs & Services → Credentials, and the consent screen offers
+    *Advanced → Go to (unsafe)* — safe, because it's your own client and it only reads mail.
+  - **`cloud-platform` must be in the list.** gcloud rejects `gmail.readonly` alone.
+
+  `gcloud auth application-default` will not widen scopes on an existing credential, so this step
+  is required; it only has to happen once. `gmail.readonly` is deliberate: the fetcher physically
+  cannot label, move, or delete mail, so quarantine stays behind the harness's approval gate.
 - **Gmail via MCP (optional second reader)** — set `GMAIL_MCP_TOKEN` (OAuth access token) or
   `GMAIL_API_KEY` (Google API key). Google's MCP server publishes no `registration_endpoint`, so
   TrueForge's `auth.type=dcr` cannot be used with it; a static credential header is the working
