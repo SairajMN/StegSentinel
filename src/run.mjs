@@ -45,7 +45,11 @@ suspicious or likely_steganographic result. Propose the next step and wait for m
     content.push({
       type: 'file',
       name: basename(record.path),
-      data: `data:${record.mimeType || 'application/octet-stream'};base64,${bytes.toString('base64')}`,
+      // Deliberately not image/png: the harness treats image/* and application/pdf as inline
+      // model input and never writes them to the sandbox, so the skill would have no file to
+      // analyse. A neutral MIME takes the upload path and lands the bytes in uploads/. The
+      // scorer identifies format by magic bytes, not by this label or the extension.
+      data: `data:application/octet-stream;base64,${bytes.toString('base64')}`,
     })
   }
 
