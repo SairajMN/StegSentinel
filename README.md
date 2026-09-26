@@ -2,17 +2,19 @@
 
 Gmail attachment steganography triage agent running on [TrueForge](https://trueforge.dev).
 
-It lists new Gmail attachments, dedupes them by SHA256, triages each one with steganalysis tools
-inside the Daytona sandbox, and reports anything suspicious to Slack — stopping for human
-approval before it touches a single message.
+It reads new Gmail attachments, dedupes them by SHA-256, scores each one for hidden data with
+steganography tools inside a Daytona sandbox, and reports anything suspicious — stopping for human
+approval before it touches a single message. The submission summary is in
+[SubMISSION.md](SubMISSION.md).
 
 ```
 Gmail ──fetch_gmail.py──► data/staged ──► sandbox: steg-triage skill ──► verdict
-                                 │
-Gmail ──MCP (optional) ──────────┘       TrueForge harness ──► approvals,
-                                        │  audit trail, sessions
-                                        ├── failover router ──► OpenAI → Gemini
-                                        └── Slack MCP ◄── plain-language report
+  gmail.readonly         SHA-256          exiftool, binwalk, zsteg, pngcheck
+                                │         + pure-Python fallbacks
+                                │
+                    TrueForge agent ──► report (Slack MCP, optional)
+                    approval gate ◄── one label, human-approved
+                    Sessions ◄── built-in audit trail
 ```
 
 ## Quickstart
@@ -41,77 +43,90 @@ cp .env.example .env    # add your keys
    npm run setup         # safe to re-run; it updates in place
    ```
 
-4. **Seed demo attachments** and upload them to a test Gmail account:
+4. **Run the whole loop in one command** — pull Gmail, stage, triage in the sandbox, report:
 
    ```bash
-   npm run seed          # fixtures/: 2 clean, 1 LSB-rigged, 1 with an appended archive
+   npm run run -- --sweep
    ```
 
-5. **Ingest and score** — runs on your machine, not in the sandbox. This is the Gmail step:
+   Or drive it in pieces:
 
    ```bash
-   npm run fetch                    # pull attachments, dedupe by hash, score each one
-   npm run fetch -- --stage-only    # just pull the bytes
+   npm run fetch                    # ingest + score locally, no sandbox
+   npm run run                      # one session on whatever is staged
+   npm run run -- --schedule        # hourly unattended sweep
    ```
 
-   It stages into `data/staged/` and writes `data/staged/manifest.json`.
+   The chat UI at `http://localhost:8790` renders the Approve/Edit/Reject card, which is the best
+   way to show the approval gate. Name a file in your message to have the agent triage it.
 
-6. **Run the agent** — chat UI (best for the live demo: Approve/Edit/Reject renders as a card) or:
+5. **Optional: fixtures.** `npm run seed` writes clean and rigged images to `fixtures/` if you want
+   known-answer material to upload to a test inbox.
 
-   ```bash
-   npm run run                # one session, streamed to your terminal
-   npm run run -- --schedule  # hourly unattended sweep
-   ```
+## What the agent reaches, and where it stops
 
-### Why ingest and the agent are separate steps
+| Reaches | Stops at |
+| --- | --- |
+| Reads mail (`messages.list` / `get` / `attachments.get`) | Labelling a thread — needs an approved action |
+| Downloads attachments to a staging dir | Anything destructive, always |
+| Runs 4 steganalysis tools + fallbacks in an isolated sandbox | Decoding a payload — no such code path exists |
+| Writes a manifest and a plain-language report | Repeating a verdict for a file it already triaged |
 
-`npm run fetch` holds the `gmail.readonly` credential and runs on your machine. The agent runs in
-the Daytona sandbox, which has neither that credential nor your disk. So ingestion is an explicit
-step you run, and the agent picks up whatever files it is given.
+The Gmail credential is scoped `gmail.readonly`, so the fetcher *cannot* label, move, or delete mail
+even if it were asked to. That is the point: the safety property lives in the token, not in prompt
+discipline. Quarantine is one label on a thread, behind TrueForge's approval gate, and the agent's
+instructions name `trash_thread` and `unlabel_thread` as off-limits even if a human requests them.
 
-This is a deliberate split, not a workaround. The credential never enters the sandbox, and the
-sandbox never gains read access to your mailbox. The agent still owns everything that matters for
-governance: the verdict, the report, the approval gate, and the audit trail.
-
-In the chat UI, name a staged file in your message to have the agent triage it, e.g.
-`triage data/staged/d063a0252ad02f18-Screenshot_2026-09-24_at_9.40.11_PM.png`.
+Ingestion runs on your machine and triage runs in the sandbox. That split is deliberate: the
+`gmail.readonly` credential and your disk never enter the sandbox, and the sandbox never gains
+mailbox access. `npm run run -- --sweep` runs both in sequence.
 
 ## Why a router for model fallback
 
 TrueForge runs one model per agent (`provider/model`) and has no failover of its own, and AWS
-Bedrock is not a built-in provider type. `src/router.mjs` is a ~90-line OpenAI-compatible proxy
-that tries each configured provider in order before the first byte reaches the harness, and
-rewrites the model id per provider. All three speak OpenAI chat-completions:
+Bedrock is not a built-in provider type. `src/router.mjs` is a ~110-line OpenAI-compatible proxy
+that tries each configured provider in order before the first byte reaches the harness, and rewrites
+the model id per provider. All of them speak OpenAI chat-completions:
 
-| Provider | Endpoint |
-| --- | --- |
-| OpenAI | `https://api.openai.com/v1` |
-| Anthropic | `https://api.anthropic.com/v1` (OpenAI SDK compatibility) |
-| Bedrock | `https://bedrock-runtime.<region>.amazonaws.com/openai/v1` + `AWS_BEARER_TOKEN_BEDROCK` |
+| Provider | Endpoint | Status here |
+| --- | --- | --- |
+| OpenAI | `https://api.openai.com/v1` | works; `gpt-5.1`, since 5.5 returns empty content |
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | plain turns only — Gemini 3.x cannot complete a tool loop over this path |
+| Anthropic | `https://api.anthropic.com/v1` | supported, not configured |
+| AWS Bedrock | `https://bedrock-runtime.<region>.amazonaws.com/openai/v1` | supported, **not usable on this account** — see below |
 
-Set `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `AWS_BEARER_TOKEN_BEDROCK` and all three get used —
-a provider that errors or is unreachable is skipped. Set only one and it uses just that one.
-TrueForge only ever talks to `failover/steg-primary`.
+Set a provider's key and it joins the chain; a provider that errors or is unreachable is skipped.
+Set none and the router refuses to start rather than silently running on nothing. TrueForge only
+ever talks to `failover/steg-primary`.
 
-`ROUTER_MODEL` (`steg-primary`) is the name the harness knows; `OPENAI_MODEL`, `ANTHROPIC_MODEL`,
-and `BEDROCK_MODEL` are the real ids each hop uses.
+`ROUTER_MODEL` (`steg-primary`) is the name the harness knows; `OPENAI_MODEL`, `GEMINI_MODEL`, and
+`ANTHROPIC_MODEL` are the real ids each hop uses.
+
+> **Bedrock caveat, stated plainly.** The key in `.env.example` authenticates (`inference-profiles`
+> returns 200) but every reachable model returns `400 Operation not allowed` — the account has no
+> enabled model, and Anthropic on Bedrock is inference-profile-only. It needs a model enabled in the
+> Bedrock console; that is a console step, not a code change.
 
 ## Verified
 
 ```bash
-npm test    # 13 tests, no API keys required
+npm test    # 32 tests
 ```
 
 | Test | Proves |
 | --- | --- |
 | `tests/router.test.mjs` | failover order, model-id rewrite, 502 when every provider is down |
-| `tests/triage.test.mjs` | clean vs LSB-rigged vs appended-archive verdicts, missing tools degrade |
-| `tests/trueforge.test.mjs` | live harness: provider, skill, agent approval gates, schedule API |
+| `tests/triage.test.mjs` | clean vs LSB-rigged vs appended-archive verdicts, format routing, false-positive regressions, Gmail staging end to end |
+| `tests/trueforge.test.mjs` | live harness: provider, skill, agent approval gates, sandbox TTL, schedule API |
 | `tests/session.test.mjs` | a real turn: agent → failover provider → router → upstream, streamed back |
 
-The session test stands up stub upstreams, so the whole chain runs without spending a token.
-Pointing the harness at a local provider is what `OUTBOUND_URL_ALLOWED_HOSTS` in `npm run trueforge`
-is for — the harness blocks loopback by default.
+`tests/triage.test.mjs` and `tests/session.test.mjs` run without API keys or a network. The session
+test stands up stub upstreams, so the whole chain runs without spending a token. Pointing the
+harness at a local provider is what `OUTBOUND_URL_ALLOWED_HOSTS` in `npm run trueforge` is for — the
+harness blocks loopback by default.
+
+The last live run: **36 attachments from 20 messages, 10 images triaged, every report carrying
+`"unavailable_tools": []`** (all five tools present), 4 clean / 3 suspicious / 3 likely_steganographic.
 
 ## Before the demo
 
@@ -122,7 +137,7 @@ is for — the harness blocks loopback by default.
 - **Daytona disk.** One sandbox is provisioned per session, and each holds a venv plus the
   analysis tools, so they add up. `npm run setup` sets `autoDeleteIntervalInMinutes` to 30
   (`SANDBOX_TTL_MINUTES`) — raise it and you will hit *"sandbox has reached its total disk
-  limit"*. To clear a full account now: `node scripts/clean-sandboxes.mjs` (add `--dry-run` first).
+  limit"*. To clear a full account now: `npm run clean-sandboxes` (add `--dry-run` first).
   The harness has no delete route, so this talks to Daytona's API directly.
 - **The first triage of a cold sandbox is slow.** The skill installs `exiftool`, `binwalk`,
   `pngcheck` and Ruby+`zsteg` on demand, which takes a few minutes. `SANDBOX_EXEC_TIMEOUT_MS`
@@ -159,16 +174,42 @@ is for — the harness blocks loopback by default.
   Either server can be omitted; the agent wires whatever is registered.
 - Add the `gmail.modify` scope only after you have seen the approval card block a label change.
 
+## Real vs. stubbed
+
+| Real | Stubbed / not wired |
+| --- | --- |
+| Gmail ingestion against a live mailbox, real OAuth | — |
+| Real analysis tools in a real Daytona sandbox | — |
+| TrueForge agent, sandbox provisioning, approval gate, Sessions audit trail | — |
+| Model calls against the configured OpenAI key | Bedrock (no enabled model on this account) |
+| Scorer, verdicts, dedupe, format routing | Slack — MCP is registered, `SLACK_MCP_URL` unset, so reports go to the chat/terminal |
+| 32 tests. 25 run with no API keys and no network; the other 7 need TrueForge running locally (still no keys) | Test corpus is synthetic (`npm run seed`, `steg_test_pngs/`) |
+
 ## Non-goals
 
 - No WhatsApp integration — no official API for personal accounts.
-- No payload decoding or extraction — detection and flagging only.
+- No payload decoding or extraction — detection and flagging only. There is no decode path in the
+  code to enable.
 - No unattended quarantine or delete — the human approval step is the point.
 
 ## Known ceilings
 
-- Failover happens before the first byte; a stream that dies mid-body is not retried.
-- TrueForge's minimum schedule interval is one hour, so `SWEEP_CRON` cannot go tighter.
-- The `zsteg` / `steghide` / `binwalk` / `exiftool` / `pngcheck` signals only fire when those
-  binaries exist in the sandbox; the pure-Python checks (trailing data, embedded signatures, LSB
-  ASCII, PNG chunk CRCs) always run.
+These are real, and worth stating before someone finds them.
+
+- **`steghide` does not install.** It needs mcrypt, which is absent from Debian's default index, and
+  there is no current Homebrew formula. **JPEG, BMP and WAV therefore run without it** — the PNG
+  path (zsteg, binwalk, pngcheck, fallbacks) is complete, but do not claim JPEG coverage. It is
+  listed in `unavailable_tools` when missing, so a report never implies coverage it did not have.
+- **A cold sandbox is slow.** First triage installs the tools, a few minutes. Pre-warm before a demo.
+- **Detection is statistical.** High-entropy noise images stay clean, but a strong LSB embedder in a
+  noisy file can still slip past the fallback. `binwalk` catches the naive appended-payload case; a
+  deliberate spread-spectrum embedder beats this.
+- **Failover happens before the first byte**; a stream that dies mid-body is not retried.
+- **TrueForge's minimum schedule interval is one hour**, so `SWEEP_CRON` cannot go tighter.
+- **Only PNG bit planes 1–2 are scanned** by the pure-Python fallback; deeper planes are unexplored.
+- **Synthetic test data only.** Real-world false-positive rates are unmeasured, and synthetic
+  fixtures flatter the detector. Measuring that against a real corpus is the next step.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
