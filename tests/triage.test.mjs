@@ -212,6 +212,9 @@ function triage(name, bytes, { bare = false } = {}) {
       ...process.env,
       PATH: bare ? pythonBin : process.env.PATH,
       STEG_TOOL_DIRS: bare ? emptyTools : process.env.STEG_TOOL_DIRS,
+      // A bare PATH is how the sandbox-with-no-tools case is reproduced; without this the
+      // scorer would try to install the tools, which the test is specifically avoiding.
+      STEG_NO_BOOTSTRAP: bare ? '1' : process.env.STEG_NO_BOOTSTRAP,
     },
   })
   return JSON.parse(out)
@@ -268,6 +271,10 @@ test('missing tools degrade instead of failing', () => {
     assert.equal(output, expected, name)
   }
   assert.equal(report.note, 'detection only — payload contents were not decoded')
+  // The report has to name what it could not check, so a bare sandbox cannot silently pass
+  // off a fallback-only analysis as a full one.
+  assert.ok(report.unavailable_tools.includes('exiftool'))
+  assert.ok(report.unavailable_tools.includes('zsteg'))
 })
 
 test('a tool that cannot read this format is not reported as missing', () => {

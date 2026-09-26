@@ -10,6 +10,7 @@ import sys
 import zlib
 
 TOOL_TIMEOUT_SECONDS = 15
+BOOTSTRAP_TIMEOUT_SECONDS = 300
 NOT_APPLICABLE = "not applicable to this format"
 CHUNK_LIMIT = 400
 ARCHIVE_MAGIC = (b"PK\x03\x04", b"\x1f\x8b\x08", b"7z\xbc\xaf\x27\x1c", b"Rar!\x1a\x07")
@@ -50,6 +51,30 @@ def tool_dirs():
         "/opt/homebrew/bin",
         "/usr/local/bin",
     ]
+
+
+def bootstrap():
+    """Install the missing analysis tools once per sandbox.
+
+    The Daytona image is bare, so a fresh sandbox reports every tool as 'not installed'
+    and the verdict rests on the pure-Python fallbacks alone. That is a weaker analysis
+    than the skill claims, so install rather than silently degrade. Best effort: a sandbox
+    without network or root still gets the fallbacks.
+    """
+    wanted = [name for name in ("exiftool", "binwalk", "pngcheck", "zsteg", "steghide")
+              if tool_path(name) is None]
+    if not wanted:
+        return []
+    if os.environ.get("STEG_NO_BOOTSTRAP") == "1":
+        return wanted
+    installer = os.path.join(os.path.dirname(os.path.abspath(__file__)), "install_tools.sh")
+    if not os.access(installer, os.X_OK):
+        return wanted
+    try:
+        subprocess.run([installer], capture_output=True, timeout=BOOTSTRAP_TIMEOUT_SECONDS)
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    return [name for name in wanted if tool_path(name) is None]
 
 
 def tool_path(name):
@@ -384,6 +409,7 @@ def triage(path):
         blob = handle.read()
 
     kind, wanted = applicable(path, blob)
+    still_missing = bootstrap()
     results = {
         "_kind": kind,
         "exiftool": run(["exiftool", path]),
@@ -417,6 +443,7 @@ def triage(path):
             if name != "_kind"
         },
         "summary": "; ".join(f"{signal['source']}:{signal['name']}" for signal in signals) or "nothing fired",
+        "unavailable_tools": still_missing,
         "note": "detection only — payload contents were not decoded",
     }
 

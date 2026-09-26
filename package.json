@@ -13,7 +13,7 @@
     "seed": "node --env-file-if-exists=.env src/seed.mjs",
     "triage": "node --env-file-if-exists=.env src/triage.mjs",
     "fetch": "node --env-file-if-exists=.env src/fetch.mjs",
-    "test": "node --env-file-if-exists=.env --test"
+    "test": "STEG_NO_BOOTSTRAP=1 node --env-file-if-exists=.env --test"
   },
   "dependencies": {
     "@truefoundry/trueforge-sdk": "^0.2.0"
