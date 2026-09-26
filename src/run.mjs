@@ -114,6 +114,19 @@ async function main() {
     await createSchedule()
     return
   }
+  if (process.argv.includes('--sweep')) {
+    // One command for the whole loop: ingest from Gmail, then triage what it staged. Without
+    // this the agent gets no files and reports "uploads/ not found", which reads as a broken
+    // sandbox rather than a step that was skipped.
+    const { fetchManifest } = await import('./fetch.mjs')
+    const query = process.env.GMAIL_QUERY
+    console.log('ingesting from Gmail...')
+    const manifest = await fetchManifest(query ? { query } : {})
+    console.log(
+      `staged ${manifest.attachments.length} attachment(s) from ` +
+        `${manifest.messages.length} message(s) — triaging\n`,
+    )
+  }
   await runOnce()
 }
 

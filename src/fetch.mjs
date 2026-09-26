@@ -3,7 +3,7 @@
 // gmail.readonly, so this can pull mail but cannot label, move, or delete anything.
 import { execFile } from 'node:child_process'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { basename } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { formatReport, triageFile } from './triage.mjs'
 
@@ -17,8 +17,14 @@ export async function fetchManifest({ query, max, dest = STAGE } = {}) {
   if (query) args.push('--query', query)
   if (max) args.push('--max', String(max))
   const { stdout } = await run('python3', args, { maxBuffer: 8 << 20 })
-  return JSON.parse(stdout)
+  const manifest = JSON.parse(stdout)
+  // The manifest is the handoff to the agent, so it is written here rather than in the CLI:
+  // every caller that ingests needs it on disk, not just the one that prints a report.
+  await mkdir(dirname(dest), { recursive: true })
+  await writeFile(join(dest, 'manifest.json'), JSON.stringify(manifest, null, 2))
+  return manifest
 }
+
 async function main() {
   const args = process.argv.slice(2)
   const only = args.includes('--stage-only')
@@ -33,9 +39,6 @@ async function main() {
     process.exitCode = 1
     return
   }
-
-  await mkdir(STAGE, { recursive: true })
-  await writeFile(MANIFEST, JSON.stringify(manifest, null, 2))
 
   const seen = new Set()
   for (const record of manifest.attachments) {

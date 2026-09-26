@@ -17,11 +17,12 @@ command -v apt-get >>"$LOG" 2>&1 && say "apt-get: yes" || say "apt-get: no"
 command -v gem >>"$LOG" 2>&1 && say "gem: $(gem --version 2>&1)" || say "gem: no"
 command -v ruby >>"$LOG" 2>&1 && say "ruby: $(ruby --version 2>&1)" || say "ruby: no"
 
-# A turn triages several files back to back. Once the install has been attempted, later files
-# must not each pay for it, so a marker file short-circuits the whole script.
+# A turn triages several files back to back, so the install must not repeat per file. The marker
+# records success only, and is written at the end rather than before: a first file killed
+# mid-install (exec timeout) would otherwise leave the marker behind, and every later file would
+# skip installing and report all five tools as missing.
 MARKER="${LOG}.done"
-if [ -f "$MARKER" ]; then exit 0; fi
-touch "$MARKER" 2>/dev/null
+[ -f "$MARKER" ] && exit 0
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -81,7 +82,21 @@ fi
 have steghide || with_lock apt_install steghide
 
 say "--- final ---"
+ok=0
 for t in exiftool binwalk pngcheck zsteg steghide; do
-  have "$t" && say "$t: ok ($(command -v "$t"))" || say "$t: MISSING"
+  if have "$t"; then
+    say "$t: ok ($(command -v "$t"))"
+    ok=$((ok + 1))
+  else
+    say "$t: MISSING"
+  fi
 done
+# Only mark the sandbox as provisioned when the tools that can be installed actually arrived.
+# steghide needs mcrypt, which is absent from Debian's index, so it is excluded deliberately.
+if [ "$ok" -ge 4 ]; then
+  touch "$MARKER" 2>/dev/null
+  say "provisioned: $ok/4 core tools present"
+else
+  say "provisioning incomplete: $ok/4 — a later run will retry"
+fi
 exit 0
