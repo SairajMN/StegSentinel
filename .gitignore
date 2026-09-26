@@ -3,4 +3,6 @@ fixtures/
 .env
 *.log
 __pycache__/
+data/
 .DS_Store
+scripts/install-steghide.sh

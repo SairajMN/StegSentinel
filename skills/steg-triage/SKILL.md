@@ -18,6 +18,24 @@ It prints one JSON object: `verdict`, `signals[]`, `tools{}`, `summary`.
 Run it from the skill directory if the path differs. Give it 30-60s — every
 tool inside gets a 15s timeout of its own.
 
+## Getting a file
+
+Attachments reach the sandbox two ways, in this order:
+
+1. Already present — `/opt/tf/uploads`, `/tmp`, or the workspace. Triage these.
+2. Gmail. The local fetcher stages attachments under their SHA-256 and writes
+   `data/staged/manifest.json`; triage each `path` in that manifest.
+
+```bash
+python3 /opt/tf/skills/steg-triage/scripts/fetch_gmail.py --dest data/staged
+```
+
+The fetcher runs with `gmail.readonly` and can only read. It never labels,
+moves, or deletes. If it reports a scope error, Gmail access is not configured —
+say so once and triage whatever files you do have, rather than retrying.
+
+Never ask for a file that was already triaged; dedupe by SHA-256 first.
+
 ## What it checks
 
 | Tool | Looks for |

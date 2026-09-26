@@ -7,11 +7,12 @@ inside the Daytona sandbox, and reports anything suspicious to Slack — stoppin
 approval before it touches a single message.
 
 ```
-Gmail ──MCP──► TrueForge harness ──► sandbox: steg-triage skill ──► verdict
-               │  (approvals, audit
-               │   trail, sessions)
-               ├── failover router ──► OpenAI → Anthropic → Bedrock
-               └── Slack MCP ◄── plain-language report
+Gmail ──fetch_gmail.py──► data/staged ──► sandbox: steg-triage skill ──► verdict
+                                 │
+Gmail ──MCP (optional) ──────────┘       TrueForge harness ──► approvals,
+                                        │  audit trail, sessions
+                                        ├── failover router ──► OpenAI → Gemini
+                                        └── Slack MCP ◄── plain-language report
 ```
 
 ## Quickstart
@@ -46,7 +47,14 @@ cp .env.example .env    # add your keys
    npm run seed          # fixtures/: 2 clean, 1 LSB-rigged, 1 with an appended archive
    ```
 
-5. **Run it** — chat UI (best for the live demo: Approve/Edit/Reject renders as a card) or:
+5. **Stage and score the inbox** — pulls attachments, dedupes by hash, runs the scorer:
+
+   ```bash
+   npm run fetch                    # stage + triage
+   npm run fetch -- --stage-only    # just pull the bytes
+   ```
+
+6. **Run it** — chat UI (best for the live demo: Approve/Edit/Reject renders as a card) or:
 
    ```bash
    npm run run                # one session, streamed to your terminal
@@ -96,9 +104,21 @@ is for — the harness blocks loopback by default.
   `SKILL_REPO_PATH` + `SKILL_REPO_REF`, so `skills/steg-triage/` has to be on the branch you pin.
 - **Daytona key** in `DAYTONA_API_KEY`. Without it `npm run setup` skips the sandbox and the agent
   has nowhere to run the skill.
-- **Gmail** — set `GMAIL_MCP_TOKEN` (OAuth access token) or `GMAIL_API_KEY` (Google API key).
-  Google's MCP server publishes no `registration_endpoint`, so TrueForge's `auth.type=dcr` cannot
-  be used with it; a static credential header is the working path. Token wins if both are set.
+- **Gmail** — one-time browser consent, then it just works:
+
+  ```bash
+  gcloud auth application-default login \
+    --scopes=https://www.googleapis.com/auth/gmail.readonly
+  ```
+
+  `gcloud auth application-default` will not widen scopes on an existing credential — that is why
+  the `login --scopes` step is required, and it only has to happen once. `gmail.readonly` is
+  deliberate: the fetcher physically cannot label, move, or delete mail, so quarantine stays behind
+  the harness's approval gate.
+- **Gmail via MCP (optional second reader)** — set `GMAIL_MCP_TOKEN` (OAuth access token) or
+  `GMAIL_API_KEY` (Google API key). Google's MCP server publishes no `registration_endpoint`, so
+  TrueForge's `auth.type=dcr` cannot be used with it; a static credential header is the working
+  path. Token wins if both are set. Nothing in the demo depends on this one.
 - **Slack** — set `SLACK_MCP_URL` and, for header auth, `SLACK_MCP_TOKEN`.
   Either server can be omitted; the agent wires whatever is registered.
 - Add the `gmail.modify` scope only after you have seen the approval card block a label change.
