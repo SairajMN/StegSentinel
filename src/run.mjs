@@ -119,6 +119,18 @@ async function main() {
     // this the agent gets no files and reports "uploads/ not found", which reads as a broken
     // sandbox rather than a step that was skipped.
     const { fetchManifest } = await import('./fetch.mjs')
+
+    // A sandbox left stopped but still claimed by a session blocks the next run, and the
+    // harness has no way to reap it. Clear them first so the sweep provisions a fresh one.
+    console.log('clearing stale sandboxes...')
+    try {
+      const { cleanSandboxes } = await import('../scripts/clean-sandboxes.mjs')
+      const { removed } = await cleanSandboxes({ quiet: true })
+      console.log(removed > 0 ? `removed ${removed} stale sandbox(es)` : 'none to remove')
+    } catch (error) {
+      console.log(`skipped: ${error.message}`)
+    }
+
     const query = process.env.GMAIL_QUERY
     console.log('ingesting from Gmail...')
     const manifest = await fetchManifest(query ? { query } : {})
@@ -126,6 +138,7 @@ async function main() {
       `staged ${manifest.attachments.length} attachment(s) from ` +
         `${manifest.messages.length} message(s) — triaging\n`,
     )
+    console.log('note: a cold sandbox installs the analysis tools first; the first file takes minutes.\n')
   }
   await runOnce()
 }
