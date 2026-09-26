@@ -8,7 +8,7 @@
 set -u
 
 LOG="${STEG_INSTALL_LOG:-/tmp/steg-install.log}"
-: >"$LOG"
+[ -f "$LOG" ] || : >"$LOG" 2>/dev/null
 say() { printf '%s\n' "$*" >>"$LOG"; }
 run() { say "\$ $*"; "$@" >>"$LOG" 2>&1; }
 
@@ -17,51 +17,68 @@ command -v apt-get >>"$LOG" 2>&1 && say "apt-get: yes" || say "apt-get: no"
 command -v gem >>"$LOG" 2>&1 && say "gem: $(gem --version 2>&1)" || say "gem: no"
 command -v ruby >>"$LOG" 2>&1 && say "ruby: $(ruby --version 2>&1)" || say "ruby: no"
 
-# The sandbox may not be root. sudo exists in some images but is unusable without a password,
-# so probe it once rather than firing a doomed command at every step.
+# A turn triages several files back to back. Once the install has been attempted, later files
+# must not each pay for it, so a marker file short-circuits the whole script.
+MARKER="${LOG}.done"
+if [ -f "$MARKER" ]; then exit 0; fi
+touch "$MARKER" 2>/dev/null
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# The install runs as whatever user the sandbox gives us; apt needs root or passwordless sudo,
+# and neither is assumed.
 SUDO=""
 if [ "$(id -u)" != "0" ] && command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
   SUDO="sudo -n"
 fi
 say "sudo: ${SUDO:-unavailable}"
 
-have() { command -v "$1" >/dev/null 2>&1; }
-
-install_pkgs() {
-  if have apt-get; then
-    run $SUDO apt-get update -qq
-    run $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@"
-  elif have apk; then
-    run $SUDO apk add --no-cache "$@"
-  elif have dnf; then
-    run $SUDO dnf install -y -q "$@"
-  elif have brew; then
-    run brew install "$@"
-  else
-    say "no package manager found"
-  fi
-}
-
 want=()
 have exiftool || want+=(exiftool)
 have pngcheck || want+=(pngcheck)
 have binwalk  || want+=(binwalk)
-[ ${#want[@]} -eq 0 ] || install_pkgs "${want[@]}"
+
+# One apt run for everything, then one lock-protected pass for the rest. Triage may be called
+# on several files in the same turn, and a previous run can still be holding the apt lock
+# ("Could not get lock /var/lib/apt/lists/lock") — serialise on our own lock file and wait.
+with_lock() {
+  local waited=0
+  until mkdir /tmp/.steg-apt-lock 2>/dev/null; do
+    say "apt lock busy (wait ${waited}s)"
+    [ "$waited" -ge 120 ] && { say "gave up waiting for apt lock"; rm -rf /tmp/.steg-apt-lock; return 1; }
+    sleep 3
+    waited=$((waited + 3))
+  done
+  "$@"
+  local status=$?
+  rmdir /tmp/.steg-apt-lock 2>/dev/null
+  return $status
+}
+
+apt_install() {
+  if have apt-get; then
+    $SUDO apt-get update -qq
+    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@"
+  else
+    say "apt-get unavailable; cannot install: $*"
+    return 1
+  fi
+}
+
+if [ ${#want[@]} -gt 0 ]; then
+  with_lock apt_install "${want[@]}"
+fi
 
 # zsteg is a Ruby gem. No Ruby in the image means no zsteg; the scorer still reports it.
 if ! have zsteg; then
-  if have gem; then
-    run $SUDO gem install --no-document zsteg
-  else
-    install_pkgs ruby ruby-dev build-essential
-    have gem && run $SUDO gem install --no-document zsteg
+  if ! have gem; then
+    with_lock apt_install ruby ruby-dev build-essential
   fi
+  have gem && run gem install --no-document zsteg
 fi
 
-# steghide needs mcrypt, which is not packaged everywhere. Each attempt is independent.
-if ! have steghide; then
-  install_pkgs steghide || install_pkgs libmcrypt steghide || install_pkgs mcrypt steghide
-fi
+# steghide needs mcrypt, which is not in Debian's default index. One attempt, no retry storm.
+have steghide || with_lock apt_install steghide
 
 say "--- final ---"
 for t in exiftool binwalk pngcheck zsteg steghide; do
