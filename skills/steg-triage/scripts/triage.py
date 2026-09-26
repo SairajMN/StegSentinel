@@ -64,17 +64,26 @@ def bootstrap():
     wanted = [name for name in ("exiftool", "binwalk", "pngcheck", "zsteg", "steghide")
               if tool_path(name) is None]
     if not wanted:
-        return []
+        return [], ""
     if os.environ.get("STEG_NO_BOOTSTRAP") == "1":
-        return wanted
+        return wanted, ""
     installer = os.path.join(os.path.dirname(os.path.abspath(__file__)), "install_tools.sh")
     if not os.access(installer, os.X_OK):
-        return wanted
+        return wanted, ""
     try:
         subprocess.run([installer], capture_output=True, timeout=BOOTSTRAP_TIMEOUT_SECONDS)
     except (subprocess.TimeoutExpired, OSError):
         pass
-    return [name for name in wanted if tool_path(name) is None]
+    # Keep the installer's log where the operator can read it; a silent "not installed" is
+    # indistinguishable from a genuine absence of the tool.
+    log = os.environ.get("STEG_INSTALL_LOG", "/tmp/steg-install.log")
+    if os.path.exists(log):
+        try:
+            with open(log, "rb") as handle:
+                return [name for name in wanted if tool_path(name) is None], handle.read()[-2000:].decode("utf-8", "replace")
+        except OSError:
+            pass
+    return [name for name in wanted if tool_path(name) is None], ""
 
 
 def tool_path(name):
@@ -409,7 +418,7 @@ def triage(path):
         blob = handle.read()
 
     kind, wanted = applicable(path, blob)
-    still_missing = bootstrap()
+    still_missing, install_log = bootstrap()
     results = {
         "_kind": kind,
         "exiftool": run(["exiftool", path]),
@@ -444,6 +453,7 @@ def triage(path):
         },
         "summary": "; ".join(f"{signal['source']}:{signal['name']}" for signal in signals) or "nothing fired",
         "unavailable_tools": still_missing,
+        "install_log": install_log,
         "note": "detection only — payload contents were not decoded",
     }
 
