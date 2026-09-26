@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { createRouter } from '../src/router.mjs'
+import { createRouter, envChain } from '../src/router.mjs'
 
 function start(handler) {
   const server = createServer(handler)
@@ -75,6 +75,62 @@ test('reports every provider failure instead of hanging', async () => {
 
   router.close()
   dead.server.close()
+})
+
+test('text-only providers are skipped once a tool loop starts', async () => {
+  const hits = []
+  const gemini = await start((_req, res) => {
+    hits.push('gemini')
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end('{"model":"gemini-stub","choices":[]}')
+  })
+  const openai = await start((_req, res) => {
+    hits.push('openai')
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end('{"model":"gpt-stub","choices":[]}')
+  })
+
+  const router = createRouter({
+    chain: [
+      { name: 'gemini', baseUrl: `http://127.0.0.1:${gemini.port}/v1`, apiKey: 'k', model: 'gemini-stub', textOnly: true },
+      { name: 'openai', baseUrl: `http://127.0.0.1:${openai.port}/v1`, apiKey: 'k', model: 'gpt-stub' },
+    ],
+    log: () => {},
+  })
+  const port = await listen(router)
+
+  const withTools = await post(port, {
+    model: 'steg-primary',
+    messages: [{ role: 'user', content: 'triage' }],
+    tools: [{ type: 'function', function: { name: 'triage', parameters: { type: 'object' } } }],
+  })
+  assert.equal(withTools.headers.get('x-router-provider'), 'openai')
+
+  const plainText = await post(port, { model: 'steg-primary', messages: [{ role: 'user', content: 'hi' }] })
+  assert.equal(plainText.headers.get('x-router-provider'), 'gemini')
+  assert.deepEqual(hits, ['openai', 'gemini'])
+
+  router.close()
+  gemini.server.close()
+  openai.server.close()
+})
+
+test('a provider with a key but no model id is not put in the chain', () => {
+  const saved = { ...process.env }
+  try {
+    process.env.AWS_BEARER_TOKEN_BEDROCK = 'bedrock-key'
+    process.env.BEDROCK_MODEL = ''
+    process.env.OPENAI_API_KEY = 'openai-key'
+    process.env.OPENAI_MODEL = 'gpt-4.1'
+    process.env.ANTHROPIC_API_KEY = ''
+    process.env.GEMINI_API_KEY = ''
+
+    const names = envChain().map(provider => provider.name)
+    assert.deepEqual(names, ['openai'])
+    assert.ok(envChain().every(provider => provider.model !== ''))
+  } finally {
+    process.env = saved
+  }
 })
 
 test('unreachable provider falls through to a healthy one', async () => {

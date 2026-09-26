@@ -9,16 +9,19 @@ export function envChain() {
   const geminiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY
   return [
     {
-      name: 'gemini',
-      baseUrl: process.env.GEMINI_BASE_URL ?? 'https://generativelanguage.googleapis.com/v1beta/openai',
-      apiKey: geminiKey,
-      model: process.env.GEMINI_MODEL ?? 'gemini-3.8-flash',
-    },
-    {
       name: 'openai',
       baseUrl: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
       apiKey: process.env.OPENAI_API_KEY,
       model: process.env.OPENAI_MODEL,
+    },
+    // ponytail: gemini answers plain turns, but its OpenAI-compat shim rejects any history that
+    // replays an assistant tool_call (missing thought_signature), so it cannot finish a tool loop.
+    {
+      name: 'gemini',
+      baseUrl: process.env.GEMINI_BASE_URL ?? 'https://generativelanguage.googleapis.com/v1beta/openai',
+      apiKey: geminiKey,
+      model: process.env.GEMINI_MODEL,
+      textOnly: true,
     },
     {
       name: 'anthropic',
@@ -66,8 +69,10 @@ export function createRouter({ chain = envChain(), log = line => console.error(l
       return sendJson(res, 400, { error: { message: 'invalid JSON body' } })
     }
 
+    const toolLoop = (request.tools?.length ?? 0) > 0
     let lastError = 'no provider configured'
     for (const provider of chain) {
+      if (provider.textOnly && toolLoop) continue
       try {
         const upstream = await fetch(`${provider.baseUrl}/chat/completions`, {
           method: 'POST',

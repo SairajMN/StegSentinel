@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Steganalysis triage: score one file for hidden data. Detection only — payloads are never decoded."""
+import glob
 import json
 import os
 import re
@@ -13,13 +14,40 @@ CHUNK_LIMIT = 400
 ARCHIVE_MAGIC = (b"PK\x03\x04", b"\x1f\x8b\x08", b"7z\xbc\xaf\x27\x1c", b"Rar!\x1a\x07")
 PRINTABLE = re.compile(rb"[\x20-\x7e]{8,}")
 BASE64ISH = re.compile(r"[A-Za-z0-9+/]{40,}={0,2}")
+ZSTEG_TEXT = re.compile(r"text:\s*(\".*\")", re.S)
+ZSTEG_MIN_RUN = 24
+ZSTEG_WORD = re.compile(r"[A-Za-z]{4,}")
+
+
+def tool_dirs():
+    """Where to look for tools beyond PATH, overridable so the no-tools case is testable."""
+    override = os.environ.get("STEG_TOOL_DIRS")
+    if override is not None:
+        return [entry for entry in override.split(os.pathsep) if entry]
+    return [
+        *sorted(glob.glob(os.path.expanduser("~/.gem/ruby/*/bin"))),
+        os.path.expanduser("~/.local/bin"),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+    ]
+
+
+def tool_path(name):
+    if shutil.which(name) is not None:
+        return name
+    for directory in tool_dirs():
+        candidate = os.path.join(directory, name)
+        if os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 
 def run(args):
-    if shutil.which(args[0]) is None:
+    binary = tool_path(args[0])
+    if binary is None:
         return None
     try:
-        result = subprocess.run(args, capture_output=True, timeout=TOOL_TIMEOUT_SECONDS)
+        result = subprocess.run([binary, *args[1:]], capture_output=True, timeout=TOOL_TIMEOUT_SECONDS)
     except (subprocess.TimeoutExpired, OSError) as error:
         return f"ERROR: {error}"
     return (result.stdout + result.stderr).decode("utf-8", "replace")
@@ -38,9 +66,51 @@ def png_idat(blob):
         if kind == b"IDAT":
             data += body
         if kind == b"IEND":
-            return {"data": bytes(data), "end": offset + 12 + length}
+            ihdr = blob[16:16 + 13]
+            width = int.from_bytes(ihdr[0:4], "big") if len(ihdr) >= 13 else 0
+            depth, color = ihdr[8], ihdr[9]
+            channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(color, 0)
+            return {
+                "data": bytes(data),
+                "end": offset + 12 + length,
+                "width": width,
+                "channels": channels,
+                "depth": depth,
+            }
         offset += 12 + length
     return None
+
+
+PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+
+
+def png_pixels(raw, width, channels):
+    """Reverse the per-scanline PNG filters so bit-plane work sees real samples."""
+    if not width or channels not in PNG_CHANNELS.values():
+        return b""
+    stride = width * channels
+    out = bytearray()
+    prior = bytearray(stride)
+    for start in range(0, len(raw) - stride, stride + 1):
+        filter_type, line, offset = raw[start], bytearray(raw[start + 1 : start + 1 + stride]), start + 1
+        for index in range(stride):
+            left = line[index - channels] if index >= channels else 0
+            up = prior[index]
+            upper_left = prior[index - channels] if index >= channels else 0
+            if filter_type == 1:
+                line[index] = (line[index] + left) & 0xFF
+            elif filter_type == 2:
+                line[index] = (line[index] + up) & 0xFF
+            elif filter_type == 3:
+                line[index] = (line[index] + ((left + up) >> 1)) & 0xFF
+            elif filter_type == 4:
+                estimate = left + up - upper_left
+                distances = (abs(estimate - left), abs(estimate - up), abs(estimate - upper_left))
+                predictor = (left, up, upper_left)[distances.index(min(distances))]
+                line[index] = (line[index] + predictor) & 0xFF
+        out += line
+        prior = line
+    return bytes(out)
 
 
 def png_chunk_errors(blob):
@@ -59,16 +129,77 @@ def png_chunk_errors(blob):
         if kind == b"IEND":
             break
     return bad
-    return bad
 
 
-def lsb_ascii_run(raw):
-    bits = [byte & 1 for byte in raw]
-    chars = bytearray(
-        sum(bits[i + j] << (7 - j) for j in range(8)) for i in range(0, len(bits) - 7, 8)
-    )
-    match = PRINTABLE.search(bytes(chars))
-    return match.group(0).decode("ascii") if match else None
+def png_text_chunks(blob):
+    offset = 8
+    while offset + 8 <= len(blob):
+        length = int.from_bytes(blob[offset : offset + 4], "big")
+        kind = blob[offset + 4 : offset + 8]
+        body = blob[offset + 8 : offset + 8 + length]
+        if len(body) != length:
+            return
+        if kind in (b"tEXt", b"zTXt", b"iTXt"):
+            keyword = body.partition(b"\x00")[0].decode("latin1", "replace")
+            value = body.partition(b"\x00")[2]
+            if kind == b"zTXt":
+                try:
+                    value = zlib.decompress(value[1:])
+                except zlib.error:
+                    value = b""
+            yield keyword, value
+        if kind == b"IEND":
+            return
+        offset += 12 + length
+
+
+def bits_to_bytes(bits, msb_first):
+    out = bytearray()
+    for index in range(0, len(bits) - 7, 8):
+        group = bits[index : index + 8]
+        value = 0
+        for position, bit in enumerate(group):
+            value = (value << 1) | bit if msb_first else value | (bit << position)
+        out.append(value)
+    return bytes(out)
+
+
+def degenerate(chunk):
+    """Repetitive bytes are a gradient/padding artifact, not a payload.
+
+    A clean synthetic image unfilters into a short repeating cycle, which decodes
+    to endless printable runs. Real payloads are not periodic.
+    """
+    for period in (1, 2, 3, 4, 6, 8):
+        if len(chunk) < period * 4:
+            continue
+        if (chunk[:period] * (len(chunk) // period + 1))[: len(chunk)] == chunk:
+            return True
+    return False
+
+
+def lsb_ascii_run(pixels, channels):
+    """Scan each channel and the interleaved stream for a readable run in a bit plane."""
+    if not pixels:
+        return None
+    planes = [pixels[channel::channels] for channel in range(channels)] + [pixels]
+    best = (0, None)
+    for label, samples in zip([f"channel {i}" for i in range(channels)] + ["interleaved"], planes):
+        for bit_index, msb_first in ((0, True), (0, False), (1, True), (1, False)):
+            bits = [(sample >> bit_index) & 1 for sample in samples]
+            decoded = bits_to_bytes(bits, msb_first)
+            where = f"{label} bit {bit_index}"
+            length = int.from_bytes(decoded[:4], "big")
+            if 8 <= length <= len(decoded) - 4:
+                body = decoded[4 : 4 + length]
+                if PRINTABLE.fullmatch(body) and not degenerate(body):
+                    return f"length-prefixed ASCII payload of {length} bytes in {where}"
+            for match in PRINTABLE.finditer(decoded):
+                chunk = match.group(0)
+                words = len(ZSTEG_WORD.findall(chunk.decode("ascii", "replace")))
+                if words >= 2 and not degenerate(chunk) and len(chunk) > best[0]:
+                    best = (len(chunk), f"printable run of {len(chunk)} characters in {where}")
+    return best[1] if best[0] >= ZSTEG_MIN_RUN else None
 
 
 def inspect(blob):
@@ -93,6 +224,24 @@ def inspect(blob):
             )
             break
 
+    suspicious_keywords = re.compile(r"comment|description|creator|author|title|payload|note|profile", re.I)
+    for keyword, value in png_text_chunks(blob):
+        if not suspicious_keywords.search(keyword):
+            continue
+        text = value.decode("latin1", "replace").strip()
+        if BASE64ISH.search(text) or len(text) > 80:
+            signals.append(
+                {
+                    "source": "fallback",
+                    "name": "oversized_metadata",
+                    "detail": f"tEXt {keyword}: {text[:60]!r}",
+                }
+            )
+        elif PRINTABLE.search(value[:512]) and re.search(r"payload|secret|steg|hidden|flag\{", text, re.I):
+            signals.append(
+                {"source": "fallback", "name": "metadata_payload", "detail": f"tEXt {keyword}: {text[:60]!r}"}
+            )
+
     if idat:
         bad = png_chunk_errors(blob)
         if bad:
@@ -102,11 +251,15 @@ def inspect(blob):
         except zlib.error as error:
             signals.append({"source": "fallback", "name": "png_idat_invalid", "detail": str(error)})
         else:
-            found = lsb_ascii_run(raw)
-            if found:
-                signals.append(
-                    {"source": "fallback", "name": "lsb_ascii", "detail": f"LSB plane carries ASCII: {found[:60]!r}"}
-                )
+            pixels = png_pixels(raw, idat["width"], idat["channels"])
+            if not pixels:
+                signals.append({"source": "fallback", "name": "png_unfilter_failed", "detail": "unsupported PNG variant or short IDAT"})
+            else:
+                found = lsb_ascii_run(pixels, idat["channels"])
+                if found:
+                    signals.append(
+                        {"source": "fallback", "name": "lsb_ascii", "detail": f"LSB plane carries ASCII: {found[:60]!r}"}
+                    )
     return signals
 
 
@@ -130,9 +283,18 @@ def from_tools(results):
         signals.append({"source": "binwalk", "name": "embedded_file", "detail": hit[:120]})
 
     zsteg = results.get("zsteg")
-    if zsteg and re.search(r"b\d+,[a-z]+,(lsb|msb).*(text|file|signature|zlib)", zsteg, re.I):
-        hit = next((line.strip() for line in zsteg.splitlines() if re.search(r"text|file|signature|zlib", line, re.I)), "")
-        signals.append({"source": "zsteg", "name": "lsb_payload", "detail": hit[:120]})
+    for line in (zsteg or "").splitlines():
+        # zsteg prints a text: hit for almost any bitplane, including noise like "7Cs73sG4sG%rW%rg&rg"
+        # from coarse 4x-downscaled planes. A real hidden message is long AND reads as words, so demand both.
+        if not re.search(r"^b\d+,[a-z]+,(lsb|msb),", line):
+            continue
+        found = ZSTEG_TEXT.search(line)
+        if not found:
+            continue
+        text = found.group(1).strip().strip('"')
+        if len(text) >= ZSTEG_MIN_RUN and len(ZSTEG_WORD.findall(text)) >= 2:
+            signals.append({"source": "zsteg", "name": "lsb_payload", "detail": line.strip()[:120]})
+            break
 
     steghide = results.get("steghide")
     if steghide and re.search(r"embedded file|zlib compressed|encrypted", steghide, re.I):
@@ -157,8 +319,11 @@ def triage(path):
         "steghide": run(["steghide", "info", "-p", "", path]),
         "pngcheck": run(["pngcheck", "-v", path]),
     }
-    signals = from_tools(results) + inspect(blob)
-    names = {signal["name"] for signal in signals}
+    unique = {}
+    for signal in from_tools(results) + inspect(blob):
+        unique.setdefault(signal["name"], signal)
+    signals = list(unique.values())
+    names = set(unique)
 
     if names & {"embedded_file", "embedded_signature"} or len(names) >= 2:
         verdict = "likely_steganographic"

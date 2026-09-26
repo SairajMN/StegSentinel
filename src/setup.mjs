@@ -4,6 +4,7 @@ const client = new TrueForge({ baseUrl: process.env.TRUEFORGE_BASE_URL ?? 'http:
 const AGENT_NAME = 'stegsentinel'
 const ROUTER_MODEL = process.env.ROUTER_MODEL ?? 'steg-primary'
 const ROUTER_PORT = process.env.ROUTER_PORT ?? '8788'
+const AGENT_MODEL = process.env.AGENT_MODEL ?? `failover/${ROUTER_MODEL}`
 
 const INSTRUCTIONS = `You are StegSentinel, a triage agent for email attachment steganography.
 
@@ -43,13 +44,12 @@ async function registerModelProviders() {
     },
   ]
 
-  const geminiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY
-  if (geminiKey) {
-    const modelId = process.env.GEMINI_MODEL ?? 'gemini-3.8-flash'
+  const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY
+  if (geminiKey && process.env.GEMINI_MODEL) {
     providers.push({
       type: 'google-gemini',
       auth: { apiKey: geminiKey },
-      models: [model(modelId)],
+      models: [model(process.env.GEMINI_MODEL)],
     })
   }
   if (process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL) {
@@ -66,16 +66,14 @@ async function registerModelProviders() {
       models: [model(process.env.ANTHROPIC_MODEL)],
     })
   }
-  const bedrockKey = process.env.AWS_BEARER_TOKEN_BEDROCK ?? process.env.BEDROCK_API_KEY
-  if (bedrockKey) {
-    const region = process.env.AWS_REGION ?? 'us-east-1'
-    const modelId = process.env.BEDROCK_MODEL ?? 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+  const bedrockKey = process.env.AWS_BEARER_TOKEN_BEDROCK || process.env.BEDROCK_API_KEY
+  if (bedrockKey && process.env.BEDROCK_MODEL) {
     providers.push({
       type: 'custom',
       name: 'bedrock',
-      baseUrl: `https://bedrock-runtime.${region}.amazonaws.com/openai/v1`,
+      baseUrl: `https://bedrock-runtime.${process.env.AWS_REGION ?? 'us-east-1'}.amazonaws.com/openai/v1`,
       auth: { apiKey: bedrockKey },
-      models: [model(modelId)],
+      models: [model(process.env.BEDROCK_MODEL)],
     })
   }
 
@@ -119,14 +117,20 @@ async function registerSkill() {
 async function registerMcpServers() {
   const registered = []
 
-  if (process.env.GMAIL_MCP_URL) {
+  // ponytail: Google's MCP server publishes no registration_endpoint, so TrueForge rejects
+  // auth.type=dcr. It takes a plain OAuth access token as a bearer header instead.
+  const gmailAuth = process.env.GMAIL_MCP_TOKEN
+    ? { type: 'header', headers: { Authorization: `Bearer ${process.env.GMAIL_MCP_TOKEN}` } }
+    : undefined
+
+  if (process.env.GMAIL_MCP_URL && gmailAuth) {
     await client.settings.mcpServers.createOrUpdate({
       manifest: {
         type: 'remote',
         name: 'gmail',
         url: process.env.GMAIL_MCP_URL,
         description: 'Read Gmail messages and download attachments.',
-        auth: { type: 'dcr' },
+        auth: gmailAuth,
       },
     })
     registered.push({
@@ -136,7 +140,10 @@ async function registerMcpServers() {
     })
     console.log('  mcp server      gmail')
   } else {
-    console.log('  mcp server      gmail skipped (GMAIL_MCP_URL unset)')
+    const why = process.env.GMAIL_MCP_URL
+      ? 'GMAIL_MCP_TOKEN unset (see README: mint an OAuth token with the gmail.readonly scope)'
+      : 'GMAIL_MCP_URL unset'
+    console.log(`  mcp server      gmail skipped (${why})`)
   }
 
   if (process.env.SLACK_MCP_URL) {
@@ -163,7 +170,7 @@ async function registerMcpServers() {
 
 function manifestFor(mcpServers) {
   return {
-    model: { name: `failover/${ROUTER_MODEL}`, params: { maxTokens: 4096, temperature: 0.3 } },
+    model: { name: AGENT_MODEL, params: { maxTokens: 4096, temperature: 0.3 } },
     instructions: INSTRUCTIONS,
     mcpServers,
     skills: [{ name: 'steg-triage' }],

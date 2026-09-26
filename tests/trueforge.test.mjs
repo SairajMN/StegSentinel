@@ -39,7 +39,7 @@ test('agent is wired with model, skill, sandbox and approval gates', { skip: liv
   const agent = page.data.find(entry => entry.name === 'stegsentinel')
 
   assert.ok(agent, 'stegsentinel agent missing — run `npm run setup`')
-  assert.equal(agent.manifest.model.name, 'failover/steg-primary')
+  assert.match(agent.manifest.model.name, /^[a-z0-9-]+\/[a-z0-9][a-z0-9-]*$/)
   assert.equal(agent.manifest.config.sandbox.enabled, true)
   assert.equal(agent.manifest.config.iterationLimit, 25)
   assert.deepEqual(agent.manifest.skills.map(skill => skill.name), ['steg-triage'])

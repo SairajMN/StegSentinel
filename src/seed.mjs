@@ -37,9 +37,10 @@ function scanlines(width, height, rgb) {
 }
 
 export function encodePng({ width, height, offset = 0, lsbText }) {
+  const channels = 3
   let raw = scanlines(width, height, pixels(width, height, offset))
   if (lsbText !== undefined) {
-    raw = embedLsb(raw, lsbText)
+    raw = embedLsb(raw, lsbText, width, channels)
   }
   const ihdr = Buffer.alloc(13)
   ihdr.writeUInt32BE(width, 0)
@@ -54,13 +55,22 @@ export function encodePng({ width, height, offset = 0, lsbText }) {
   ])
 }
 
-function embedLsb(raw, text) {
+function embedLsb(raw, text, width, channels) {
   const out = Buffer.from(raw)
+  const rowBytes = width * channels
   const bits = [...Buffer.from(text, 'utf8')].flatMap(byte =>
     [7, 6, 5, 4, 3, 2, 1, 0].map(shift => (byte >> shift) & 1),
   )
-  bits.forEach((bit, index) => {
-    out[index] = (out[index] & 0xfe) | bit
+  // Skip each scanline's filter byte, otherwise the payload lands in filter
+  // metadata and unfilters into nothing.
+  const slots = []
+  for (let start = 0; start + 1 + rowBytes <= out.length && slots.length < bits.length; start += rowBytes + 1) {
+    for (let index = 0; index < rowBytes && slots.length < bits.length; index += 1) {
+      slots.push(start + 1 + index)
+    }
+  }
+  slots.forEach((offset, index) => {
+    out[offset] = (out[offset] & 0xfe) | bits[index]
   })
   return out
 }

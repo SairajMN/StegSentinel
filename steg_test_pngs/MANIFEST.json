@@ -1,0 +1,36 @@
+{
+  "purpose": "Synthetic steganalysis QA fixtures",
+  "payload": "STEG-TEST-PAYLOAD|Product QA|SHA256 verification test|2026-09-26",
+  "files": [
+    {
+      "file": "01_clean_baseline.png",
+      "bytes": 6481,
+      "sha256": "851e775671705b34e244f5dffd6411336834d2a65d7747fc96206399ef2ae613"
+    },
+    {
+      "file": "02_lsb_hidden_text.png",
+      "bytes": 6941,
+      "sha256": "7d9dc1c4646043ebcc56382c24b1ff358871c70e9cfe01fdf2ad121b2f33ef5d"
+    },
+    {
+      "file": "03_metadata_payload.png",
+      "bytes": 6665,
+      "sha256": "8cc7048d43f5e40cf1df7cf7285b756369392f1d8106775f172cbe74842b879b"
+    },
+    {
+      "file": "04_high_entropy_noise.png",
+      "bytes": 788086,
+      "sha256": "83d5c5ba2a9b6e3a9c6fc98e9af39b5e3dcfbcd01128633ec6284432dcbe0f3a"
+    },
+    {
+      "file": "05_pair_clean.png",
+      "bytes": 6481,
+      "sha256": "851e775671705b34e244f5dffd6411336834d2a65d7747fc96206399ef2ae613"
+    },
+    {
+      "file": "06_pair_lsb_stego.png",
+      "bytes": 6862,
+      "sha256": "0428cb439513a2a3be437a9d025e35c701c4d762b51acbfa53e4d918cb6213e0"
+    }
+  ]
+}
